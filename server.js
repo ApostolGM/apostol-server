@@ -204,10 +204,8 @@ app.post('/api/inventory/equip', authMiddleware, async (req, res) => {
   const cid = slot.character_id;
 
   if (item.is_weapon) {
-    // Получаем все занятые слоты рук
     const { data: hands } = await supabase.from('inventory_slots').select('*, item:items(*)').eq('character_id', cid).eq('equipped', true).in('slot_type', ['правая_рука', 'левая_рука']);
     
-    // Считаем занятые слоты рук
     let usedSlots = 0;
     for (const h of hands) {
       usedSlots += (h.item?.is_heavy ? 2 : 1);
@@ -216,26 +214,22 @@ app.post('/api/inventory/equip', authMiddleware, async (req, res) => {
     const needed = item.is_heavy ? 2 : 1;
     
     if (usedSlots + needed > 2) {
-      return res.status(400).json({ error: 'Не хватает слотов рук. Снимите оружие (использовано ' + usedSlots + ' из 2, нужно ещё ' + needed + ')' });
+      return res.status(400).json({ error: 'Не хватает слотов рук. Снимите оружие.' });
     }
 
     if (item.is_heavy) {
-      // Снимаем всё оружие с рук
       for (const h of hands) {
         await supabase.from('inventory_slots').update({ equipped: false, slot_type: 'рюкзак' }).eq('id', h.id);
       }
-      // Экипируем тяжёлое в правую руку
       const { data, error } = await supabase.from('inventory_slots').update({ equipped: true, slot_type: 'правая_рука' }).eq('id', slot_id).select('*, item:items(*)').single();
       if (error) return res.status(500).json({ error: error.message });
       return res.json(data);
     } else {
-      // Лёгкое оружие — в свободный слот
       const occupiedSlots = hands.map(h => h.slot_type);
       let target = 'правая_рука';
       if (occupiedSlots.includes('правая_рука') && !occupiedSlots.includes('левая_рука')) {
         target = 'левая_рука';
       } else if (occupiedSlots.includes('правая_рука') && occupiedSlots.includes('левая_рука')) {
-        // Обе заняты — снимаем левую
         const left = hands.find(h => h.slot_type === 'левая_рука');
         if (left) await supabase.from('inventory_slots').update({ equipped: false, slot_type: 'рюкзак' }).eq('id', left.id);
         target = 'левая_рука';
@@ -300,32 +294,34 @@ app.post('/api/inventory/reload', authMiddleware, async (req, res) => {
     return res.status(400).json({ error: 'Не дальнобойное оружие' });
   }
 
-  // Ищем ВСЕ предметы типа "расходник" в инвентаре персонажа
+  const neededAmmoType = slot.item.ammo_type;
+  if (!neededAmmoType) {
+    return res.status(400).json({ error: 'Для этого оружия не указан тип патронов' });
+  }
+
   const { data: allSlots } = await supabase.from('inventory_slots')
     .select('*, item:items(*)')
     .eq('character_id', slot.character_id)
-    .eq('equipped', false);
+    .eq('equipped', false)
+    .eq('item.trade_category', 'патроны');
 
-  // Фильтруем — ищем патроны (trade_category === 'патроны')
-  const ammoSlot = allSlots?.find(s => s.item?.trade_category === 'патроны');
-  
+  const ammoSlot = allSlots?.find(s => s.item?.ammo_type === neededAmmoType);
+
   if (!ammoSlot) {
-    return res.status(400).json({ error: 'Нет патронов в инвентаре' });
+    return res.status(400).json({ error: `Нет патронов типа "${neededAmmoType}" в инвентаре` });
   }
 
   const maxAmmo = slot.item.max_ammo || 0;
-  
-  // Обновляем боезапас оружия
+
   await supabase.from('items').update({ current_ammo: maxAmmo }).eq('id', slot.item.id);
 
-  // Тратим одну пачку патронов
   if (ammoSlot.quantity <= 1) {
     await supabase.from('inventory_slots').delete().eq('id', ammoSlot.id);
   } else {
     await supabase.from('inventory_slots').update({ quantity: ammoSlot.quantity - 1 }).eq('id', ammoSlot.id);
   }
 
-  res.json({ success: true, current_ammo: maxAmmo, max_ammo: maxAmmo });
+  res.json({ success: true, current_ammo: maxAmmo, max_ammo: maxAmmo, ammo_type: neededAmmoType });
 });
 
 // NPC
@@ -354,7 +350,16 @@ app.delete('/api/npcs/:id', authMiddleware, async (req, res) => {
 app.post('/api/npcs/:id/clone', authMiddleware, async (req, res) => {
   const { data: orig } = await supabase.from('npcs').select('*').eq('id', req.params.id).single();
   if (!orig) return res.status(404).json({ error: 'Не найден' });
-  const { data: clone, error } = await supabase.from('npcs').insert({ ...orig, id: undefined, name: req.body.name || `${orig.name} (копия)`, is_template: false }).select().single();
+  const { data: clone, error } = await supabase.from('npcs').insert({ 
+    name: req.body.name || `${orig.name} (копия)`, 
+    type: orig.type, 
+    health_thresholds: orig.health_thresholds, 
+    skills: orig.skills, 
+    special_properties: orig.special_properties, 
+    visibility: orig.visibility, 
+    campaign_id: orig.campaign_id, 
+    is_template: false 
+  }).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(clone);
 });
@@ -403,5 +408,6 @@ app.post('/api/dice/auto', authMiddleware, async (req, res) => {
 });
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
+
 const PORT = process.env.PORT || 3000;
 httpServer.listen(PORT, () => console.log(`APOSTOL на ${PORT}`));
