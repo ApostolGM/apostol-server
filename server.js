@@ -296,14 +296,35 @@ app.post('/api/inventory/use', authMiddleware, async (req, res) => {
 app.post('/api/inventory/reload', authMiddleware, async (req, res) => {
   const { slot_id } = req.body;
   const { data: slot } = await supabase.from('inventory_slots').select('*, item:items(*)').eq('id', slot_id).single();
-  if (!slot || !slot.item?.is_weapon || slot.item?.weapon_type !== 'ranged') return res.status(400).json({ error: 'Не дальнобойное оружие' });
-  const { data: ammo } = await supabase.from('inventory_slots').select('*, item:items(*)').eq('character_id', slot.character_id).eq('item.type', 'расходник').or('item.type.eq.патроны');
-  const ammoSlot = ammo?.find(a => a.item?.name?.toLowerCase().includes('патрон'));
-  if (!ammoSlot) return res.status(400).json({ error: 'Нет патронов' });
+  if (!slot || !slot.item?.is_weapon || slot.item?.weapon_type !== 'ranged') {
+    return res.status(400).json({ error: 'Не дальнобойное оружие' });
+  }
+
+  // Ищем ВСЕ предметы типа "расходник" в инвентаре персонажа
+  const { data: allSlots } = await supabase.from('inventory_slots')
+    .select('*, item:items(*)')
+    .eq('character_id', slot.character_id)
+    .eq('equipped', false);
+
+  // Фильтруем — ищем патроны (trade_category === 'патроны')
+  const ammoSlot = allSlots?.find(s => s.item?.trade_category === 'патроны');
+  
+  if (!ammoSlot) {
+    return res.status(400).json({ error: 'Нет патронов в инвентаре' });
+  }
+
   const maxAmmo = slot.item.max_ammo || 0;
+  
+  // Обновляем боезапас оружия
   await supabase.from('items').update({ current_ammo: maxAmmo }).eq('id', slot.item.id);
-  if (ammoSlot.quantity <= 1) await supabase.from('inventory_slots').delete().eq('id', ammoSlot.id);
-  else await supabase.from('inventory_slots').update({ quantity: ammoSlot.quantity - 1 }).eq('id', ammoSlot.id);
+
+  // Тратим одну пачку патронов
+  if (ammoSlot.quantity <= 1) {
+    await supabase.from('inventory_slots').delete().eq('id', ammoSlot.id);
+  } else {
+    await supabase.from('inventory_slots').update({ quantity: ammoSlot.quantity - 1 }).eq('id', ammoSlot.id);
+  }
+
   res.json({ success: true, current_ammo: maxAmmo, max_ammo: maxAmmo });
 });
 
