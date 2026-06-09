@@ -202,36 +202,67 @@ app.post('/api/inventory/equip', authMiddleware, async (req, res) => {
   if (!slot) return res.status(404).json({ error: 'Не найден' });
   const item = slot.item;
   const cid = slot.character_id;
+
   if (item.is_weapon) {
-    const { data: hands } = await supabase.from('inventory_slots').select('*').eq('character_id', cid).in('slot_type', ['правая_рука','левая_рука']);
-    const equippedHands = hands.filter(h => h.equipped);
-    const usedSlots = equippedHands.reduce((s, h) => s + (h.item?.is_heavy ? 2 : 1), 0);
+    // Получаем все занятые слоты рук
+    const { data: hands } = await supabase.from('inventory_slots').select('*, item:items(*)').eq('character_id', cid).eq('equipped', true).in('slot_type', ['правая_рука', 'левая_рука']);
+    
+    // Считаем занятые слоты рук
+    let usedSlots = 0;
+    for (const h of hands) {
+      usedSlots += (h.item?.is_heavy ? 2 : 1);
+    }
+    
     const needed = item.is_heavy ? 2 : 1;
-    if (usedSlots + needed > 2) return res.status(400).json({ error: 'Не хватает слотов рук. Снимите оружие.' });
+    
+    if (usedSlots + needed > 2) {
+      return res.status(400).json({ error: 'Не хватает слотов рук. Снимите оружие (использовано ' + usedSlots + ' из 2, нужно ещё ' + needed + ')' });
+    }
+
     if (item.is_heavy) {
-      for (const h of equippedHands) await supabase.from('inventory_slots').update({ equipped: false, slot_type: 'рюкзак' }).eq('id', h.id);
+      // Снимаем всё оружие с рук
+      for (const h of hands) {
+        await supabase.from('inventory_slots').update({ equipped: false, slot_type: 'рюкзак' }).eq('id', h.id);
+      }
+      // Экипируем тяжёлое в правую руку
       const { data, error } = await supabase.from('inventory_slots').update({ equipped: true, slot_type: 'правая_рука' }).eq('id', slot_id).select('*, item:items(*)').single();
       if (error) return res.status(500).json({ error: error.message });
       return res.json(data);
     } else {
-      const target = equippedHands.length === 0 ? 'правая_рука' : (equippedHands.length === 1 ? 'левая_рука' : 'правая_рука');
+      // Лёгкое оружие — в свободный слот
+      const occupiedSlots = hands.map(h => h.slot_type);
+      let target = 'правая_рука';
+      if (occupiedSlots.includes('правая_рука') && !occupiedSlots.includes('левая_рука')) {
+        target = 'левая_рука';
+      } else if (occupiedSlots.includes('правая_рука') && occupiedSlots.includes('левая_рука')) {
+        // Обе заняты — снимаем левую
+        const left = hands.find(h => h.slot_type === 'левая_рука');
+        if (left) await supabase.from('inventory_slots').update({ equipped: false, slot_type: 'рюкзак' }).eq('id', left.id);
+        target = 'левая_рука';
+      } else if (occupiedSlots.includes('левая_рука') && !occupiedSlots.includes('правая_рука')) {
+        target = 'правая_рука';
+      }
+      
       const { data, error } = await supabase.from('inventory_slots').update({ equipped: true, slot_type: target }).eq('id', slot_id).select('*, item:items(*)').single();
       if (error) return res.status(500).json({ error: error.message });
       return res.json(data);
     }
   }
+
   if (item.is_armor || item.type === 'броня') {
     await supabase.from('inventory_slots').update({ equipped: false, slot_type: 'рюкзак' }).eq('character_id', cid).eq('slot_type', 'тело').neq('id', slot_id);
     const { data, error } = await supabase.from('inventory_slots').update({ equipped: true, slot_type: 'тело' }).eq('id', slot_id).select('*, item:items(*)').single();
     if (error) return res.status(500).json({ error: error.message });
     return res.json(data);
   }
+
   if (item.type === 'экзоскелет') {
     await supabase.from('inventory_slots').update({ equipped: false, slot_type: 'рюкзак' }).eq('character_id', cid).eq('slot_type', 'экзоскелет').neq('id', slot_id);
     const { data, error } = await supabase.from('inventory_slots').update({ equipped: true, slot_type: 'экзоскелет' }).eq('id', slot_id).select('*, item:items(*)').single();
     if (error) return res.status(500).json({ error: error.message });
     return res.json(data);
   }
+
   res.status(400).json({ error: 'Нельзя экипировать' });
 });
 app.post('/api/inventory/unequip', authMiddleware, async (req, res) => {
