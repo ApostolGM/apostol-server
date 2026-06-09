@@ -299,6 +299,16 @@ app.post('/api/inventory/reload', authMiddleware, async (req, res) => {
     return res.status(400).json({ error: 'Для этого оружия не указан тип патронов' });
   }
 
+  // Сколько патронов нужно для полной перезарядки
+  const maxAmmo = slot.item.max_ammo || 0;
+  const currentAmmo = slot.item.current_ammo || 0;
+  const needed = maxAmmo - currentAmmo;
+
+  if (needed <= 0) {
+    return res.status(400).json({ error: 'Магазин уже полон' });
+  }
+
+  // Ищем патроны нужного типа в инвентаре
   const { data: allSlots } = await supabase.from('inventory_slots')
     .select('*, item:items(*)')
     .eq('character_id', slot.character_id)
@@ -311,17 +321,28 @@ app.post('/api/inventory/reload', authMiddleware, async (req, res) => {
     return res.status(400).json({ error: `Нет патронов типа "${neededAmmoType}" в инвентаре` });
   }
 
-  const maxAmmo = slot.item.max_ammo || 0;
+  const ammoAvailable = ammoSlot.quantity;
+  const toReload = Math.min(needed, ammoAvailable);
 
-  await supabase.from('items').update({ current_ammo: maxAmmo }).eq('id', slot.item.id);
+  // Обновляем боезапас оружия
+  await supabase.from('items').update({ current_ammo: currentAmmo + toReload }).eq('id', slot.item.id);
 
-  if (ammoSlot.quantity <= 1) {
+  // Тратим патроны
+  const remaining = ammoAvailable - toReload;
+  if (remaining <= 0) {
     await supabase.from('inventory_slots').delete().eq('id', ammoSlot.id);
   } else {
-    await supabase.from('inventory_slots').update({ quantity: ammoSlot.quantity - 1 }).eq('id', ammoSlot.id);
+    await supabase.from('inventory_slots').update({ quantity: remaining }).eq('id', ammoSlot.id);
   }
 
-  res.json({ success: true, current_ammo: maxAmmo, max_ammo: maxAmmo, ammo_type: neededAmmoType });
+  res.json({
+    success: true,
+    current_ammo: currentAmmo + toReload,
+    max_ammo: maxAmmo,
+    used: toReload,
+    remaining_ammo_in_inventory: Math.max(0, remaining),
+    ammo_type: neededAmmoType
+  });
 });
 
 // NPC
