@@ -48,13 +48,22 @@ io.on('connection', (socket) => {
       socket.emit('dice_result', payload);
     } else io.to(`campaign:${data.campaignId}`).emit('dice_result', payload);
   });
+  socket.on('scene_token_move', (data) => {
+    socket.to(`campaign:${data.campaignId}`).emit('scene_token_moved', data);
+  });
+  socket.on('scene_update', (data) => {
+    socket.to(`campaign:${data.campaignId}`).emit('scene_updated', data);
+  });
+  socket.on('scene_draw', (data) => {
+    socket.to(`campaign:${data.campaignId}`).emit('scene_drawn', data);
+  });
   socket.on('set_role', (role) => { socket.data.role = role; });
   socket.on('disconnect', () => {
     for (const [uid, d] of activeUsers.entries()) if (d.socketId === socket.id) { activeUsers.delete(uid); break; }
   });
 });
 
-// AUTH
+// ===== AUTH =====
 app.post('/api/auth/register', async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) return res.status(400).json({ error: 'Логин и пароль обязательны' });
@@ -78,14 +87,15 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
   res.json(user);
 });
 
-// CAMPAIGNS
+// ===== CAMPAIGNS =====
 app.post('/api/campaigns', authMiddleware, async (req, res) => {
   const { title } = req.body;
   const invite_code = uuidv4().substring(0, 8);
   const { data: c, error } = await supabase.from('campaigns').insert({ title, master_id: req.user.id, invite_code }).select().single();
   if (error) return res.status(500).json({ error: error.message });
   await supabase.from('campaign_members').insert({ campaign_id: c.id, user_id: req.user.id, role: 'master' });
-  await supabase.from('scenes').insert({ campaign_id: c.id });
+  await supabase.from('scenes').insert({ campaign_id: c.id, scene_type: 'local' });
+  await supabase.from('scenes').insert({ campaign_id: c.id, scene_type: 'global' });
   res.json(c);
 });
 app.post('/api/campaigns/join/:code', authMiddleware, async (req, res) => {
@@ -109,7 +119,7 @@ app.get('/api/campaigns/:id', authMiddleware, async (req, res) => {
   res.json({ ...c, members });
 });
 
-// PROFESSIONS / PERKS / SKILLS
+// ===== PROFESSIONS / PERKS / SKILLS =====
 app.get('/api/professions', authMiddleware, async (req, res) => {
   const { data } = await supabase.from('professions').select('*').eq('is_global', true);
   res.json(data);
@@ -123,7 +133,7 @@ app.get('/api/skills', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
-// CHARACTERS
+// ===== CHARACTERS =====
 app.post('/api/characters', authMiddleware, async (req, res) => {
   const { campaign_id, name, profession_id, perk_ids } = req.body;
   const { data: prof } = await supabase.from('professions').select('*').eq('id', profession_id).single();
@@ -159,7 +169,6 @@ app.get('/api/characters/:id', authMiddleware, async (req, res) => {
   const sm = {};
   for (const p of perks) for (const m of (p.effect_modifiers || [])) sm[m.skill] = (sm[m.skill] || 0) + (m.modifier || 0);
   skills = skills.map(s => ({ ...s, totalModifier: (s.modifier||0)+(sm[s.name]||0), perkBonus: sm[s.name]||0 }));
-
   const { data: inv } = await supabase.from('inventory_slots').select('*, item:items(*)').eq('character_id', ch.id);
   res.json({ ...ch, profession: prof, perks, skills, inventory: inv || [] });
 });
@@ -172,7 +181,7 @@ app.put('/api/characters/:id/params', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
-// INVENTORY
+// ===== INVENTORY =====
 app.post('/api/inventory/add', authMiddleware, async (req, res) => {
   const { character_id, item_id, quantity, slot_type } = req.body;
   const st = slot_type || 'рюкзак';
@@ -205,58 +214,42 @@ app.post('/api/inventory/equip', authMiddleware, async (req, res) => {
 
   if (item.is_weapon) {
     const { data: hands } = await supabase.from('inventory_slots').select('*, item:items(*)').eq('character_id', cid).eq('equipped', true).in('slot_type', ['правая_рука', 'левая_рука']);
-    
     let usedSlots = 0;
-    for (const h of hands) {
-      usedSlots += (h.item?.is_heavy ? 2 : 1);
-    }
-    
+    for (const h of hands) usedSlots += (h.item?.is_heavy ? 2 : 1);
     const needed = item.is_heavy ? 2 : 1;
-    
-    if (usedSlots + needed > 2) {
-      return res.status(400).json({ error: 'Не хватает слотов рук. Снимите оружие.' });
-    }
+    if (usedSlots + needed > 2) return res.status(400).json({ error: 'Не хватает слотов рук. Снимите оружие.' });
 
     if (item.is_heavy) {
-      for (const h of hands) {
-        await supabase.from('inventory_slots').update({ equipped: false, slot_type: 'рюкзак' }).eq('id', h.id);
-      }
+      for (const h of hands) await supabase.from('inventory_slots').update({ equipped: false, slot_type: 'рюкзак' }).eq('id', h.id);
       const { data, error } = await supabase.from('inventory_slots').update({ equipped: true, slot_type: 'правая_рука' }).eq('id', slot_id).select('*, item:items(*)').single();
       if (error) return res.status(500).json({ error: error.message });
       return res.json(data);
     } else {
       const occupiedSlots = hands.map(h => h.slot_type);
       let target = 'правая_рука';
-      if (occupiedSlots.includes('правая_рука') && !occupiedSlots.includes('левая_рука')) {
-        target = 'левая_рука';
-      } else if (occupiedSlots.includes('правая_рука') && occupiedSlots.includes('левая_рука')) {
+      if (occupiedSlots.includes('правая_рука') && !occupiedSlots.includes('левая_рука')) target = 'левая_рука';
+      else if (occupiedSlots.includes('правая_рука') && occupiedSlots.includes('левая_рука')) {
         const left = hands.find(h => h.slot_type === 'левая_рука');
         if (left) await supabase.from('inventory_slots').update({ equipped: false, slot_type: 'рюкзак' }).eq('id', left.id);
         target = 'левая_рука';
-      } else if (occupiedSlots.includes('левая_рука') && !occupiedSlots.includes('правая_рука')) {
-        target = 'правая_рука';
-      }
-      
+      } else if (occupiedSlots.includes('левая_рука') && !occupiedSlots.includes('правая_рука')) target = 'правая_рука';
       const { data, error } = await supabase.from('inventory_slots').update({ equipped: true, slot_type: target }).eq('id', slot_id).select('*, item:items(*)').single();
       if (error) return res.status(500).json({ error: error.message });
       return res.json(data);
     }
   }
-
   if (item.is_armor || item.type === 'броня') {
     await supabase.from('inventory_slots').update({ equipped: false, slot_type: 'рюкзак' }).eq('character_id', cid).eq('slot_type', 'тело').neq('id', slot_id);
     const { data, error } = await supabase.from('inventory_slots').update({ equipped: true, slot_type: 'тело' }).eq('id', slot_id).select('*, item:items(*)').single();
     if (error) return res.status(500).json({ error: error.message });
     return res.json(data);
   }
-
   if (item.type === 'экзоскелет') {
     await supabase.from('inventory_slots').update({ equipped: false, slot_type: 'рюкзак' }).eq('character_id', cid).eq('slot_type', 'экзоскелет').neq('id', slot_id);
     const { data, error } = await supabase.from('inventory_slots').update({ equipped: true, slot_type: 'экзоскелет' }).eq('id', slot_id).select('*, item:items(*)').single();
     if (error) return res.status(500).json({ error: error.message });
     return res.json(data);
   }
-
   res.status(400).json({ error: 'Нельзя экипировать' });
 });
 app.post('/api/inventory/unequip', authMiddleware, async (req, res) => {
@@ -293,59 +286,32 @@ app.post('/api/inventory/reload', authMiddleware, async (req, res) => {
   if (!slot || !slot.item?.is_weapon || slot.item?.weapon_type !== 'ranged') {
     return res.status(400).json({ error: 'Не дальнобойное оружие' });
   }
-
   const neededAmmoType = slot.item.ammo_type;
-  if (!neededAmmoType) {
-    return res.status(400).json({ error: 'Для этого оружия не указан тип патронов' });
-  }
-
-  // Сколько патронов нужно для полной перезарядки
+  if (!neededAmmoType) return res.status(400).json({ error: 'Для этого оружия не указан тип патронов' });
   const maxAmmo = slot.item.max_ammo || 0;
   const currentAmmo = slot.item.current_ammo || 0;
   const needed = maxAmmo - currentAmmo;
+  if (needed <= 0) return res.status(400).json({ error: 'Магазин уже полон' });
 
-  if (needed <= 0) {
-    return res.status(400).json({ error: 'Магазин уже полон' });
-  }
-
-  // Ищем патроны нужного типа в инвентаре
   const { data: allSlots } = await supabase.from('inventory_slots')
     .select('*, item:items(*)')
     .eq('character_id', slot.character_id)
     .eq('equipped', false)
     .eq('item.trade_category', 'патроны');
-
   const ammoSlot = allSlots?.find(s => s.item?.ammo_type === neededAmmoType);
-
-  if (!ammoSlot) {
-    return res.status(400).json({ error: `Нет патронов типа "${neededAmmoType}" в инвентаре` });
-  }
+  if (!ammoSlot) return res.status(400).json({ error: `Нет патронов типа "${neededAmmoType}" в инвентаре` });
 
   const ammoAvailable = ammoSlot.quantity;
   const toReload = Math.min(needed, ammoAvailable);
-
-  // Обновляем боезапас оружия
   await supabase.from('items').update({ current_ammo: currentAmmo + toReload }).eq('id', slot.item.id);
-
-  // Тратим патроны
   const remaining = ammoAvailable - toReload;
-  if (remaining <= 0) {
-    await supabase.from('inventory_slots').delete().eq('id', ammoSlot.id);
-  } else {
-    await supabase.from('inventory_slots').update({ quantity: remaining }).eq('id', ammoSlot.id);
-  }
+  if (remaining <= 0) await supabase.from('inventory_slots').delete().eq('id', ammoSlot.id);
+  else await supabase.from('inventory_slots').update({ quantity: remaining }).eq('id', ammoSlot.id);
 
-  res.json({
-    success: true,
-    current_ammo: currentAmmo + toReload,
-    max_ammo: maxAmmo,
-    used: toReload,
-    remaining_ammo_in_inventory: Math.max(0, remaining),
-    ammo_type: neededAmmoType
-  });
+  res.json({ success: true, current_ammo: currentAmmo + toReload, max_ammo: maxAmmo, used: toReload, remaining_ammo_in_inventory: Math.max(0, remaining), ammo_type: neededAmmoType });
 });
 
-// NPC
+// ===== NPC =====
 app.get('/api/npcs', authMiddleware, async (req, res) => {
   const { campaign_id, is_template } = req.query;
   let q = supabase.from('npcs').select('*');
@@ -372,14 +338,9 @@ app.post('/api/npcs/:id/clone', authMiddleware, async (req, res) => {
   const { data: orig } = await supabase.from('npcs').select('*').eq('id', req.params.id).single();
   if (!orig) return res.status(404).json({ error: 'Не найден' });
   const { data: clone, error } = await supabase.from('npcs').insert({ 
-    name: req.body.name || `${orig.name} (копия)`, 
-    type: orig.type, 
-    health_thresholds: orig.health_thresholds, 
-    skills: orig.skills, 
-    special_properties: orig.special_properties, 
-    visibility: orig.visibility, 
-    campaign_id: orig.campaign_id, 
-    is_template: false 
+    name: req.body.name || `${orig.name} (копия)`, type: orig.type, health_thresholds: orig.health_thresholds, 
+    skills: orig.skills, special_properties: orig.special_properties, visibility: orig.visibility, 
+    campaign_id: orig.campaign_id, is_template: false 
   }).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(clone);
@@ -394,7 +355,7 @@ app.post('/api/npcs/:id/roll', authMiddleware, async (req, res) => {
   res.json({ npc_name: npc.name, skill_name: req.body.skill_name, d20roll: d20, modifier: mod, sum: d20+mod, formula: `d20 (${d20}) + ${mod}` });
 });
 
-// ITEMS
+// ===== ITEMS =====
 app.get('/api/items', authMiddleware, async (req, res) => {
   const { data } = await supabase.from('items').select('*');
   res.json(data);
@@ -405,7 +366,7 @@ app.post('/api/items', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
-// DICE
+// ===== DICE =====
 app.post('/api/dice/auto', authMiddleware, async (req, res) => {
   const { character_id, skill_name } = req.body;
   const { data: ch } = await supabase.from('characters').select('*').eq('id', character_id).single();
@@ -428,40 +389,19 @@ app.post('/api/dice/auto', authMiddleware, async (req, res) => {
   res.json({ character_id, skill_name, d20roll: d20, baseModifier: skill.baseModifier||0, perkBonus: pb, totalModifier: total, sum: d20+total, formula: `d20 (${d20}) + ${total}` });
 });
 
-// ===== ЗАГРУЗКА ФАЙЛОВ (ФОНЫ) =====
-app.post('/api/upload/background', authMiddleware, async (req, res) => {
-  const { campaign_id, name, url } = req.body;
-  if (!campaign_id || !url) return res.status(400).json({ error: 'campaign_id и url обязательны' });
-  const { data, error } = await supabase.from('backgrounds').insert({ campaign_id, name, url }).select().single();
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-
-app.get('/api/backgrounds/:campaign_id', authMiddleware, async (req, res) => {
-  const { data } = await supabase.from('backgrounds').select('*').eq('campaign_id', req.params.campaign_id);
-  res.json(data || []);
-});
-
-// ===== СЦЕНЫ =====
+// ===== SCENES =====
 app.get('/api/scenes/:campaign_id', authMiddleware, async (req, res) => {
-  const { type } = req.query; // local или global
+  const { type } = req.query;
   const query = supabase.from('scenes').select('*').eq('campaign_id', req.params.campaign_id);
   if (type) query.eq('scene_type', type);
   const { data } = await query;
   res.json(data || []);
 });
-
 app.put('/api/scenes/:campaign_id', authMiddleware, async (req, res) => {
   const { scene_type, background_url, fog_of_war, tokens, drawings } = req.body;
   if (!scene_type) return res.status(400).json({ error: 'scene_type обязателен' });
-  
-  // Ищем существующую сцену этого типа
   const { data: existing } = await supabase.from('scenes')
-    .select('id')
-    .eq('campaign_id', req.params.campaign_id)
-    .eq('scene_type', scene_type)
-    .single();
-
+    .select('id').eq('campaign_id', req.params.campaign_id).eq('scene_type', scene_type).single();
   if (existing) {
     const updates = {};
     if (background_url !== undefined) updates.background_url = background_url;
@@ -473,19 +413,26 @@ app.put('/api/scenes/:campaign_id', authMiddleware, async (req, res) => {
     return res.json(data);
   } else {
     const { data, error } = await supabase.from('scenes').insert({
-      campaign_id: req.params.campaign_id,
-      scene_type,
-      background_url: background_url || null,
-      fog_of_war: fog_of_war || [],
-      tokens: tokens || [],
-      drawings: drawings || []
+      campaign_id: req.params.campaign_id, scene_type, background_url: background_url || null,
+      fog_of_war: fog_of_war || [], tokens: tokens || [], drawings: drawings || []
     }).select().single();
     if (error) return res.status(500).json({ error: error.message });
     return res.json(data);
   }
 });
 
-// WebSocket: не трогаем, он уже есть. Добавим события в клиенте.
+// ===== BACKGROUNDS =====
+app.post('/api/upload/background', authMiddleware, async (req, res) => {
+  const { campaign_id, name, url } = req.body;
+  if (!campaign_id || !url) return res.status(400).json({ error: 'campaign_id и url обязательны' });
+  const { data, error } = await supabase.from('backgrounds').insert({ campaign_id, name, url }).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+app.get('/api/backgrounds/:campaign_id', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('backgrounds').select('*').eq('campaign_id', req.params.campaign_id);
+  res.json(data || []);
+});
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
