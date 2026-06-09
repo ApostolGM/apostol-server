@@ -1,12 +1,19 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
 import { createClient } from '@supabase/supabase-js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 
 const app = express();
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+  cors: { origin: '*', methods: ['GET', 'POST'] }
+});
+
 app.use(cors());
 app.use(express.json());
 
@@ -28,6 +35,63 @@ function authMiddleware(req, res, next) {
     res.status(401).json({ error: 'Токен недействителен' });
   }
 }
+
+// Карта активных сокетов: userId -> { socketId, campaignId }
+const activeUsers = new Map();
+
+// ===== WEBSOCKET =====
+io.on('connection', (socket) => {
+  console.log('Socket connected:', socket.id);
+
+  socket.on('join_campaign', ({ userId, campaignId }) => {
+    socket.join(`campaign:${campaignId}`);
+    activeUsers.set(userId, { socketId: socket.id, campaignId });
+    console.log(`${userId} joined campaign ${campaignId}`);
+  });
+
+  socket.on('leave_campaign', ({ userId }) => {
+    const user = activeUsers.get(userId);
+    if (user) {
+      socket.leave(`campaign:${user.campaignId}`);
+      activeUsers.delete(userId);
+    }
+  });
+
+  socket.on('dice_roll', (data) => {
+    // data: { campaignId, userId, username, formula, rolls, sum, skillName, hidden }
+    const payload = { ...data, time: new Date().toISOString() };
+    if (data.hidden) {
+      // Отправляем только мастеру и со-мастеру
+      const campaignRoom = io.sockets.adapter.rooms.get(`campaign:${data.campaignId}`);
+      if (campaignRoom) {
+        for (const socketId of campaignRoom) {
+          const sock = io.sockets.sockets.get(socketId);
+          if (sock && sock.data?.role && ['master', 'co-master'].includes(sock.data.role)) {
+            sock.emit('dice_result', payload);
+          }
+        }
+      }
+      // Отправителю тоже показываем
+      socket.emit('dice_result', payload);
+    } else {
+      io.to(`campaign:${data.campaignId}`).emit('dice_result', payload);
+    }
+  });
+
+  socket.on('set_role', (role) => {
+    socket.data.role = role;
+  });
+
+  socket.on('disconnect', () => {
+    for (const [userId, data] of activeUsers.entries()) {
+      if (data.socketId === socket.id) {
+        activeUsers.delete(userId);
+        break;
+      }
+    }
+    console.log('Socket disconnected:', socket.id);
+  });
+});
 
 // ===== АВТОРИЗАЦИЯ =====
 app.post('/api/auth/register', async (req, res) => {
@@ -115,21 +179,18 @@ app.get('/api/skills', authMiddleware, async (req, res) => {
 app.post('/api/characters', authMiddleware, async (req, res) => {
   const { campaign_id, name, profession_id, perk_ids } = req.body;
 
-  // Получаем профессию
   const { data: profession } = await supabase.from('professions').select('*').eq('id', profession_id).single();
   if (!profession) return res.status(400).json({ error: 'Профессия не найдена' });
 
-  // Считаем стоимость перков
   let balancePoints = 10;
   if (perk_ids && perk_ids.length > 0) {
     const { data: perks } = await supabase.from('perks').select('*').in('id', perk_ids);
     for (const perk of perks) {
-      balancePoints += perk.cost; // cost отрицательный для позитивных (тратят очки), положительный для негативных (дают очки)
+      balancePoints += perk.cost;
     }
   }
-  if (balancePoints < 0) return res.status(400).json({ error: `Не хватает очков распределения. Баланс: ${balancePoints}` });
+  if (balancePoints < 0) return res.status(400).json({ error: `Не хватает очков. Баланс: ${balancePoints}` });
 
-  // Создаём персонажа
   const { data: character, error } = await supabase.from('characters').insert({
     user_id: req.user.id,
     campaign_id,
@@ -143,7 +204,6 @@ app.post('/api/characters', authMiddleware, async (req, res) => {
 
   if (error) return res.status(500).json({ error: error.message });
 
-  // Добавляем стартовые навыки из профессии
   const starterSkills = profession.starter_skills || [];
   for (const ss of starterSkills) {
     const { data: skillData } = await supabase.from('skills').select('id').eq('name', ss.skill).single();
@@ -156,14 +216,12 @@ app.post('/api/characters', authMiddleware, async (req, res) => {
     }
   }
 
-  // Добавляем перки
   if (perk_ids && perk_ids.length > 0) {
     for (const perk_id of perk_ids) {
       await supabase.from('character_perks').insert({ character_id: character.id, perk_id });
     }
   }
 
-  // Привязываем персонажа к члену кампании
   await supabase.from('campaign_members').update({ character_id: character.id }).eq('campaign_id', campaign_id).eq('user_id', req.user.id);
 
   res.json(character);
@@ -173,10 +231,8 @@ app.get('/api/characters/:id', authMiddleware, async (req, res) => {
   const { data: character } = await supabase.from('characters').select('*').eq('id', req.params.id).single();
   if (!character) return res.status(404).json({ error: 'Персонаж не найден' });
 
-  // Получаем профессию
   const { data: profession } = await supabase.from('professions').select('*').eq('id', character.profession_id).single();
 
-  // Получаем перки
   const { data: cp } = await supabase.from('character_perks').select('perk_id').eq('character_id', character.id);
   const perkIds = cp.map(p => p.perk_id);
   let perks = [];
@@ -185,7 +241,6 @@ app.get('/api/characters/:id', authMiddleware, async (req, res) => {
     perks = data;
   }
 
-  // Получаем навыки
   const { data: cs } = await supabase.from('character_skills').select('skill_id, modifier').eq('character_id', character.id);
   const skillIds = cs.map(s => s.skill_id);
   let skills = [];
@@ -197,10 +252,27 @@ app.get('/api/characters/:id', authMiddleware, async (req, res) => {
     });
   }
 
+  // Добавляем модификаторы от перков к навыкам
+  const skillModifiers = {};
+  for (const perk of perks) {
+    if (perk.effect_modifiers && Array.isArray(perk.effect_modifiers)) {
+      for (const mod of perk.effect_modifiers) {
+        if (!skillModifiers[mod.skill]) skillModifiers[mod.skill] = 0;
+        skillModifiers[mod.skill] += mod.modifier || 0;
+      }
+    }
+  }
+
+  skills = skills.map(s => ({
+    ...s,
+    totalModifier: (s.modifier || 0) + (skillModifiers[s.name] || 0),
+    perkBonus: skillModifiers[s.name] || 0
+  }));
+
   res.json({ ...character, profession, perks, skills });
 });
 
-// Обновление параметров персонажа (Мастер)
+// Обновление параметров персонажа
 app.put('/api/characters/:id/params', authMiddleware, async (req, res) => {
   const { food, water, stress, game_time_date, game_time_hours, game_time_minutes, carry_weight_max } = req.body;
   const updates = {};
@@ -229,12 +301,65 @@ app.post('/api/items', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
+// ===== БРОСОК С АВТОПОДСТАНОВКОЙ =====
+app.post('/api/dice/auto', authMiddleware, async (req, res) => {
+  const { character_id, skill_name } = req.body;
+
+  const { data: character } = await supabase.from('characters').select('*').eq('id', character_id).single();
+  if (!character) return res.status(404).json({ error: 'Персонаж не найден' });
+
+  // Получаем навыки персонажа
+  const { data: cs } = await supabase.from('character_skills').select('skill_id, modifier').eq('character_id', character_id);
+  const skillIds = cs.map(s => s.skill_id);
+  const { data: skillsData } = await supabase.from('skills').select('*').in('id', skillIds);
+  const charSkills = skillsData.map(s => {
+    const csEntry = cs.find(e => e.skill_id === s.id);
+    return { ...s, baseModifier: csEntry?.modifier || 0 };
+  });
+
+  // Ищем нужный навык
+  const skill = charSkills.find(s => s.name === skill_name);
+  if (!skill) return res.status(404).json({ error: `Навык "${skill_name}" не найден у персонажа` });
+
+  // Получаем бонусы от перков
+  const { data: cp } = await supabase.from('character_perks').select('perk_id').eq('character_id', character_id);
+  const perkIds = cp.map(p => p.perk_id);
+  let perkBonus = 0;
+  if (perkIds.length > 0) {
+    const { data: perks } = await supabase.from('perks').select('*').in('id', perkIds);
+    for (const perk of perks) {
+      if (perk.effect_modifiers && Array.isArray(perk.effect_modifiers)) {
+        for (const mod of perk.effect_modifiers) {
+          if (mod.skill === skill_name) {
+            perkBonus += mod.modifier || 0;
+          }
+        }
+      }
+    }
+  }
+
+  const totalModifier = (skill.baseModifier || 0) + perkBonus;
+  const d20roll = Math.floor(Math.random() * 20) + 1;
+  const sum = d20roll + totalModifier;
+
+  res.json({
+    character_id,
+    skill_name,
+    d20roll,
+    baseModifier: skill.baseModifier || 0,
+    perkBonus,
+    totalModifier,
+    sum,
+    formula: `d20 (${d20roll}) + ${totalModifier}`
+  });
+});
+
 // ===== ЗДОРОВЬЕ =====
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+httpServer.listen(PORT, () => {
   console.log(`APOSTOL сервер запущен на порту ${PORT}`);
 });
