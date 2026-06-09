@@ -428,6 +428,65 @@ app.post('/api/dice/auto', authMiddleware, async (req, res) => {
   res.json({ character_id, skill_name, d20roll: d20, baseModifier: skill.baseModifier||0, perkBonus: pb, totalModifier: total, sum: d20+total, formula: `d20 (${d20}) + ${total}` });
 });
 
+// ===== ЗАГРУЗКА ФАЙЛОВ (ФОНЫ) =====
+app.post('/api/upload/background', authMiddleware, async (req, res) => {
+  const { campaign_id, name, url } = req.body;
+  if (!campaign_id || !url) return res.status(400).json({ error: 'campaign_id и url обязательны' });
+  const { data, error } = await supabase.from('backgrounds').insert({ campaign_id, name, url }).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.get('/api/backgrounds/:campaign_id', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('backgrounds').select('*').eq('campaign_id', req.params.campaign_id);
+  res.json(data || []);
+});
+
+// ===== СЦЕНЫ =====
+app.get('/api/scenes/:campaign_id', authMiddleware, async (req, res) => {
+  const { type } = req.query; // local или global
+  const query = supabase.from('scenes').select('*').eq('campaign_id', req.params.campaign_id);
+  if (type) query.eq('scene_type', type);
+  const { data } = await query;
+  res.json(data || []);
+});
+
+app.put('/api/scenes/:campaign_id', authMiddleware, async (req, res) => {
+  const { scene_type, background_url, fog_of_war, tokens, drawings } = req.body;
+  if (!scene_type) return res.status(400).json({ error: 'scene_type обязателен' });
+  
+  // Ищем существующую сцену этого типа
+  const { data: existing } = await supabase.from('scenes')
+    .select('id')
+    .eq('campaign_id', req.params.campaign_id)
+    .eq('scene_type', scene_type)
+    .single();
+
+  if (existing) {
+    const updates = {};
+    if (background_url !== undefined) updates.background_url = background_url;
+    if (fog_of_war !== undefined) updates.fog_of_war = fog_of_war;
+    if (tokens !== undefined) updates.tokens = tokens;
+    if (drawings !== undefined) updates.drawings = drawings;
+    const { data, error } = await supabase.from('scenes').update(updates).eq('id', existing.id).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json(data);
+  } else {
+    const { data, error } = await supabase.from('scenes').insert({
+      campaign_id: req.params.campaign_id,
+      scene_type,
+      background_url: background_url || null,
+      fog_of_war: fog_of_war || [],
+      tokens: tokens || [],
+      drawings: drawings || []
+    }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json(data);
+  }
+});
+
+// WebSocket: не трогаем, он уже есть. Добавим события в клиенте.
+
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.PORT || 3000;
