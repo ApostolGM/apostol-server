@@ -524,7 +524,8 @@ app.post('/api/dice/auto', authMiddleware, async (req, res) => {
     const { data: perks } = await supabase.from('perks').select('*').in('id', pIds);
     for (const p of perks) for (const m of (p.effect_modifiers||[])) if (m.skill === skill_name) pb += m.modifier||0;
   }
-  const total = (skill.baseModifier||0) + pb;
+  const totalModPercent = (skill.baseModifier||0) + pb;
+  const total = Math.round(20 * totalModPercent / 100);
   const d20 = Math.floor(Math.random()*20)+1;
   res.json({ character_id, skill_name, d20roll: d20, baseModifier: skill.baseModifier||0, perkBonus: pb, totalModifier: total, sum: d20+total, formula: `d20 (${d20}) + ${total}` });
 });
