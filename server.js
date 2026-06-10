@@ -10,14 +10,6 @@ import { v4 as uuidv4 } from 'uuid';
 
 const app = express();
 const httpServer = createServer(app);
-
-// CORS для обычных запросов
-app.use(cors({
-  origin: 'https://apostol.onrender.com',
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
-app.use(express.json());
-
 const io = new Server(httpServer, {
   cors: {
     origin: 'https://apostol.onrender.com',
@@ -25,6 +17,12 @@ const io = new Server(httpServer, {
     allowedHeaders: ['Content-Type', 'Authorization']
   }
 });
+
+app.use(cors({
+  origin: 'https://apostol.onrender.com',
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+app.use(express.json());
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -141,7 +139,7 @@ app.get('/api/campaigns/:id/characters', authMiddleware, async (req, res) => {
     .neq('character_id', null);
   const characters = [];
   for (const m of members) {
-    if (m.character_id) {
+    if (m.character_id && m.role === 'player') {
       const { data: ch } = await supabase.from('characters').select('*').eq('id', m.character_id).single();
       if (ch) {
         const { data: prof } = await supabase.from('professions').select('*').eq('id', ch.profession_id).single();
@@ -181,6 +179,14 @@ app.get('/api/skills', authMiddleware, async (req, res) => {
 // ===== CHARACTERS =====
 app.post('/api/characters', authMiddleware, async (req, res) => {
   const { campaign_id, name, profession_id, perk_ids } = req.body;
+  
+  // Проверяем, что пользователь НЕ мастер
+  const { data: member } = await supabase.from('campaign_members')
+    .select('role').eq('campaign_id', campaign_id).eq('user_id', req.user.id).single();
+  if (!member || ['master', 'co-master'].includes(member.role)) {
+    return res.status(403).json({ error: 'Мастер не может создавать персонажа' });
+  }
+
   const { data: prof } = await supabase.from('professions').select('*').eq('id', profession_id).single();
   if (!prof) return res.status(400).json({ error: 'Профессия не найдена' });
   let bp = 10;
@@ -229,6 +235,11 @@ app.put('/api/characters/:id/params', authMiddleware, async (req, res) => {
 // ===== INVENTORY =====
 app.post('/api/inventory/add', authMiddleware, async (req, res) => {
   const { character_id, item_id, quantity, slot_type } = req.body;
+  
+  // Проверяем, что персонаж принадлежит пользователю
+  const { data: ch } = await supabase.from('characters').select('user_id').eq('id', character_id).single();
+  if (!ch || ch.user_id !== req.user.id) return res.status(403).json({ error: 'Не ваш персонаж' });
+
   const st = slot_type || 'рюкзак';
   const { data: existing } = await supabase.from('inventory_slots').select('*').eq('character_id', character_id).eq('item_id', item_id).eq('slot_type', st).single();
   if (existing && !['правая_рука','левая_рука','тело','экзоскелет'].includes(st)) {
@@ -242,8 +253,13 @@ app.post('/api/inventory/add', authMiddleware, async (req, res) => {
 });
 app.post('/api/inventory/remove', authMiddleware, async (req, res) => {
   const { slot_id, quantity } = req.body;
-  const { data: slot } = await supabase.from('inventory_slots').select('*').eq('id', slot_id).single();
+  const { data: slot } = await supabase.from('inventory_slots').select('*, item:items(*)').eq('id', slot_id).single();
   if (!slot) return res.status(404).json({ error: 'Не найден' });
+  
+  // Проверяем владельца
+  const { data: ch } = await supabase.from('characters').select('user_id').eq('id', slot.character_id).single();
+  if (!ch || ch.user_id !== req.user.id) return res.status(403).json({ error: 'Не ваш персонаж' });
+
   const nq = slot.quantity - (quantity || 1);
   if (nq <= 0) { await supabase.from('inventory_slots').delete().eq('id', slot_id); return res.json({ deleted: true }); }
   const { data, error } = await supabase.from('inventory_slots').update({ quantity: nq }).eq('id', slot_id).select('*, item:items(*)').single();
@@ -254,6 +270,11 @@ app.post('/api/inventory/equip', authMiddleware, async (req, res) => {
   const { slot_id } = req.body;
   const { data: slot } = await supabase.from('inventory_slots').select('*, item:items(*)').eq('id', slot_id).single();
   if (!slot) return res.status(404).json({ error: 'Не найден' });
+
+  // Проверяем владельца
+  const { data: ch } = await supabase.from('characters').select('user_id').eq('id', slot.character_id).single();
+  if (!ch || ch.user_id !== req.user.id) return res.status(403).json({ error: 'Не ваш персонаж' });
+
   const item = slot.item;
   const cid = slot.character_id;
 
@@ -299,6 +320,12 @@ app.post('/api/inventory/equip', authMiddleware, async (req, res) => {
 });
 app.post('/api/inventory/unequip', authMiddleware, async (req, res) => {
   const { slot_id } = req.body;
+  const { data: slot } = await supabase.from('inventory_slots').select('*, item:items(*)').eq('id', slot_id).single();
+  if (!slot) return res.status(404).json({ error: 'Не найден' });
+
+  const { data: ch } = await supabase.from('characters').select('user_id').eq('id', slot.character_id).single();
+  if (!ch || ch.user_id !== req.user.id) return res.status(403).json({ error: 'Не ваш персонаж' });
+
   const { data, error } = await supabase.from('inventory_slots').update({ equipped: false, slot_type: 'рюкзак' }).eq('id', slot_id).select('*, item:items(*)').single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
@@ -307,6 +334,10 @@ app.post('/api/inventory/use', authMiddleware, async (req, res) => {
   const { slot_id } = req.body;
   const { data: slot } = await supabase.from('inventory_slots').select('*, item:items(*)').eq('id', slot_id).single();
   if (!slot) return res.status(404).json({ error: 'Не найден' });
+
+  const { data: ch } = await supabase.from('characters').select('user_id').eq('id', slot.character_id).single();
+  if (!ch || ch.user_id !== req.user.id) return res.status(403).json({ error: 'Не ваш персонаж' });
+
   const item = slot.item;
   if (item.weapon_type === 'ranged' && slot.equipped) {
     if ((item.current_ammo || 0) <= 0) return res.status(400).json({ error: 'Нет патронов' });
@@ -329,6 +360,10 @@ app.post('/api/inventory/reload', authMiddleware, async (req, res) => {
   const { slot_id } = req.body;
   const { data: slot } = await supabase.from('inventory_slots').select('*, item:items(*)').eq('id', slot_id).single();
   if (!slot || !slot.item?.is_weapon || slot.item?.weapon_type !== 'ranged') return res.status(400).json({ error: 'Не дальнобойное оружие' });
+
+  const { data: ch } = await supabase.from('characters').select('user_id').eq('id', slot.character_id).single();
+  if (!ch || ch.user_id !== req.user.id) return res.status(403).json({ error: 'Не ваш персонаж' });
+
   const neededAmmoType = slot.item.ammo_type;
   if (!neededAmmoType) return res.status(400).json({ error: 'Для этого оружия не указан тип патронов' });
   const maxAmmo = slot.item.max_ammo || 0;
