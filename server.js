@@ -133,35 +133,51 @@ app.get('/api/campaigns/:id/characters', authMiddleware, async (req, res) => {
   if (!member || !['master', 'co-master'].includes(member.role)) {
     return res.status(403).json({ error: 'Только для Мастера' });
   }
+
   const { data: members } = await supabase.from('campaign_members')
     .select('user_id, role, character_id')
     .eq('campaign_id', req.params.id)
+    .eq('role', 'player')
     .neq('character_id', null);
 
   if (!members || members.length === 0) return res.json([]);
 
   const characters = [];
   for (const m of members) {
-    if (m.character_id && m.role === 'player') {
+    try {
       const { data: ch } = await supabase.from('characters').select('*').eq('id', m.character_id).single();
-      if (ch) {
-        const { data: prof } = await supabase.from('professions').select('*').eq('id', ch.profession_id).single();
-        const { data: cp } = await supabase.from('character_perks').select('perk_id').eq('character_id', ch.id);
-        const pIds = cp.map(x => x.perk_id);
-        let perks = [];
-        if (pIds.length) { const { data } = await supabase.from('perks').select('*').in('id', pIds); perks = data; }
-        const { data: cs } = await supabase.from('character_skills').select('skill_id, modifier').eq('character_id', ch.id);
-        const sIds = cs.map(x => x.skill_id);
-        let skills = [];
-        if (sIds.length) {
-          const { data: sd } = await supabase.from('skills').select('*').in('id', sIds);
-          skills = sd.map(s => ({ ...s, modifier: cs.find(e => e.skill_id === s.id)?.modifier || 0 }));
-        }
-        const { data: inv } = await supabase.from('inventory_slots').select('*, item:items(*)').eq('character_id', ch.id);
-        characters.push({ ...ch, profession: prof, perks, skills, inventory: inv || [], owner_role: m.role, owner_id: m.user_id });
+      if (!ch) continue;
+
+      const { data: prof } = await supabase.from('professions').select('*').eq('id', ch.profession_id).single();
+      const { data: cp } = await supabase.from('character_perks').select('perk_id').eq('character_id', ch.id);
+      const pIds = (cp || []).map(x => x.perk_id);
+      let perks = [];
+      if (pIds.length) { const { data } = await supabase.from('perks').select('*').in('id', pIds); perks = data || []; }
+
+      const { data: cs } = await supabase.from('character_skills').select('skill_id, modifier').eq('character_id', ch.id);
+      const sIds = (cs || []).map(x => x.skill_id);
+      let skills = [];
+      if (sIds.length) {
+        const { data: sd } = await supabase.from('skills').select('*').in('id', sIds);
+        skills = (sd || []).map(s => ({ ...s, modifier: (cs || []).find(e => e.skill_id === s.id)?.modifier || 0 }));
       }
+
+      const { data: inv } = await supabase.from('inventory_slots').select('*, item:items(*)').eq('character_id', ch.id);
+
+      characters.push({
+        ...ch,
+        profession: prof,
+        perks,
+        skills,
+        inventory: inv || [],
+        owner_role: m.role,
+        owner_id: m.user_id
+      });
+    } catch (err) {
+      console.error('Error loading character:', m.character_id, err);
     }
   }
+
   res.json(characters);
 });
 
