@@ -144,7 +144,7 @@ app.get('/api/campaigns/:id/characters', authMiddleware, async (req, res) => {
     .select('user_id, role, character_id')
     .eq('campaign_id', req.params.id)
     .eq('role', 'player')
-    .neq('character_id', null);
+   .not('character_id', 'is', null);
 
   console.log('Members found:', members?.length, 'Error:', membersError);
   if (members) for (const m of members) console.log('  Member:', m.user_id, m.role, m.character_id);
