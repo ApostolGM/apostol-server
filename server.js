@@ -10,9 +10,21 @@ import { v4 as uuidv4 } from 'uuid';
 
 const app = express();
 const httpServer = createServer(app);
-const io = new Server(httpServer, { cors: { origin: '*', methods: ['GET', 'POST'] } });
-app.use(cors());
+
+// CORS для обычных запросов
+app.use(cors({
+  origin: 'https://apostol.onrender.com',
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
+
+const io = new Server(httpServer, {
+  cors: {
+    origin: 'https://apostol.onrender.com',
+    methods: ['GET', 'POST'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+  }
+});
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 const JWT_SECRET = process.env.JWT_SECRET;
