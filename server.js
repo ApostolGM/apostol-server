@@ -128,24 +128,34 @@ app.get('/api/campaigns/:id', authMiddleware, async (req, res) => {
 
 // ===== MASTER: CHARACTERS =====
 app.get('/api/campaigns/:id/characters', authMiddleware, async (req, res) => {
+  console.log('=== MASTER CHARACTERS ===');
+  console.log('User ID:', req.user.id);
+  console.log('Campaign ID:', req.params.id);
+
   const { data: member } = await supabase.from('campaign_members')
     .select('role').eq('campaign_id', req.params.id).eq('user_id', req.user.id).single();
+  console.log('Member role:', member?.role);
+
   if (!member || !['master', 'co-master'].includes(member.role)) {
     return res.status(403).json({ error: 'Только для Мастера' });
   }
 
-  const { data: members } = await supabase.from('campaign_members')
+  const { data: members, error: membersError } = await supabase.from('campaign_members')
     .select('user_id, role, character_id')
     .eq('campaign_id', req.params.id)
     .eq('role', 'player')
     .neq('character_id', null);
+
+  console.log('Members found:', members?.length, 'Error:', membersError);
+  if (members) for (const m of members) console.log('  Member:', m.user_id, m.role, m.character_id);
 
   if (!members || members.length === 0) return res.json([]);
 
   const characters = [];
   for (const m of members) {
     try {
-      const { data: ch } = await supabase.from('characters').select('*').eq('id', m.character_id).single();
+      const { data: ch, error: chError } = await supabase.from('characters').select('*').eq('id', m.character_id).single();
+      console.log('  Character:', m.character_id, ch?.name, 'Error:', chError);
       if (!ch) continue;
 
       const { data: prof } = await supabase.from('professions').select('*').eq('id', ch.profession_id).single();
@@ -165,19 +175,15 @@ app.get('/api/campaigns/:id/characters', authMiddleware, async (req, res) => {
       const { data: inv } = await supabase.from('inventory_slots').select('*, item:items(*)').eq('character_id', ch.id);
 
       characters.push({
-        ...ch,
-        profession: prof,
-        perks,
-        skills,
-        inventory: inv || [],
-        owner_role: m.role,
-        owner_id: m.user_id
+        ...ch, profession: prof, perks, skills, inventory: inv || [],
+        owner_role: m.role, owner_id: m.user_id
       });
     } catch (err) {
       console.error('Error loading character:', m.character_id, err);
     }
   }
 
+  console.log('=== RESULT:', characters.length, 'characters ===');
   res.json(characters);
 });
 
