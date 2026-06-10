@@ -499,12 +499,13 @@ app.post('/api/dice/auto', authMiddleware, async (req, res) => {
     const { data: perks } = await supabase.from('perks').select('*').in('id', pIds);
     for (const p of (perks || [])) for (const m of (p.effect_modifiers||[])) if (m.skill === skill_name) pb += m.modifier||0;
   }
- const totalPercent = (skill.baseModifier||0) + pb;
-const sides = 20; // d20 по умолчанию
-const d20 = Math.floor(Math.random() * sides) + 1;
-const bonus = Math.round(sides * totalPercent / 100);
-const sum = d20 + bonus;
-res.json({ character_id, skill_name, d20roll: d20, baseModifier: skill.baseModifier||0, perkBonus: pb, totalPercent, bonus, sum, formula: `d20 (${d20}) + ${bonus} (${totalPercent}% от ${sides})` });
+  const totalPercent = (skill.baseModifier||0) + pb;
+  const sides = 20;
+  const d20 = Math.floor(Math.random() * sides) + 1;
+  const bonus = Math.round(sides * totalPercent / 100);
+  const sum = d20 + bonus;
+  res.json({ character_id, skill_name, d20roll: d20, baseModifier: skill.baseModifier||0, perkBonus: pb, totalPercent, bonus, sum, formula: `d20 (${d20}) + ${bonus} (${totalPercent}%)` });
+});
 
 // ===== SCENES =====
 app.get('/api/scenes/:campaign_id', authMiddleware, async (req, res) => {
