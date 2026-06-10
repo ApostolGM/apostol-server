@@ -338,25 +338,44 @@ app.post('/api/inventory/use', authMiddleware, async (req, res) => {
   const { slot_id } = req.body;
   const { data: slot } = await supabase.from('inventory_slots').select('*, item:items(*)').eq('id', slot_id).single();
   if (!slot) return res.status(404).json({ error: 'Не найден' });
-  const { data: ch } = await supabase.from('characters').select('user_id').eq('id', slot.character_id).single();
+  const { data: ch } = await supabase.from('characters').select('user_id, name').eq('id', slot.character_id).single();
   if (!ch || ch.user_id !== req.user.id) return res.status(403).json({ error: 'Не ваш персонаж' });
   const item = slot.item;
+  let result = null;
+  
   if (item.weapon_type === 'ranged' && slot.equipped) {
     if ((item.current_ammo || 0) <= 0) return res.status(400).json({ error: 'Нет патронов' });
     await supabase.from('items').update({ current_ammo: (item.current_ammo || 1) - 1 }).eq('id', item.id);
-    return res.json({ used: 'ammo', remaining: (item.current_ammo || 1) - 1 });
-  }
-  if (item.weapon_type === 'thrown' && slot.equipped) {
+    result = { used: 'ammo', remaining: (item.current_ammo || 1) - 1, action: 'выстрелил из' };
+  } else if (item.weapon_type === 'thrown' && slot.equipped) {
     await supabase.from('inventory_slots').delete().eq('id', slot_id);
-    return res.json({ used: 'thrown', deleted: true });
-  }
-  if (item.type === 'расходник') {
+    result = { used: 'thrown', deleted: true, action: 'метнул' };
+  } else if (item.type === 'расходник') {
     const nq = slot.quantity - 1;
-    if (nq <= 0) { await supabase.from('inventory_slots').delete().eq('id', slot_id); return res.json({ used: 'consumable', deleted: true }); }
-    await supabase.from('inventory_slots').update({ quantity: nq }).eq('id', slot_id);
-    return res.json({ used: 'consumable', remaining: nq });
+    if (nq <= 0) {
+      await supabase.from('inventory_slots').delete().eq('id', slot_id);
+      result = { used: 'consumable', deleted: true, action: 'использовал' };
+    } else {
+      await supabase.from('inventory_slots').update({ quantity: nq }).eq('id', slot_id);
+      result = { used: 'consumable', remaining: nq, action: 'использовал' };
+    }
+  } else {
+    return res.status(400).json({ error: 'Нельзя использовать' });
   }
-  res.status(400).json({ error: 'Нельзя использовать' });
+  
+  // Автосообщение в чат
+  const msgText = `${ch.name} ${result.action} ${item.name}`;
+  const { data: msg } = await supabase.from('chat_messages').insert({
+    campaign_id: slot.character_id ? (await supabase.from('characters').select('campaign_id').eq('id', slot.character_id).single()).data?.campaign_id : null,
+    user_id: req.user.id,
+    username: ch.name,
+    text: msgText,
+    is_roll: false
+  }).select().single();
+  
+  if (msg) io.to(`campaign:${msg.campaign_id}`).emit('chat_message', msg);
+  
+  res.json(result);
 });
 app.post('/api/inventory/reload', authMiddleware, async (req, res) => {
   const { slot_id } = req.body;
@@ -550,7 +569,32 @@ app.get('/api/backgrounds/:campaign_id', authMiddleware, async (req, res) => {
   const { data } = await supabase.from('backgrounds').select('*').eq('campaign_id', req.params.campaign_id);
   res.json(data || []);
 });
+// ===== CHAT =====
+app.get('/api/chat/:campaign_id', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('chat_messages')
+    .select('*')
+    .eq('campaign_id', req.params.campaign_id)
+    .order('created_at', { ascending: false })
+    .limit(60);
+  res.json((data || []).reverse());
+});
 
+app.post('/api/chat/:campaign_id', authMiddleware, async (req, res) => {
+  const { text, is_roll } = req.body;
+  const { data, error } = await supabase.from('chat_messages').insert({
+    campaign_id: req.params.campaign_id,
+    user_id: req.user.id,
+    username: req.user.username,
+    text,
+    is_roll: is_roll || false
+  }).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  
+  // Отправляем через WebSocket
+  io.to(`campaign:${req.params.campaign_id}`).emit('chat_message', data);
+  
+  res.json(data);
+});
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.PORT || 3000;
