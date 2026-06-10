@@ -137,6 +137,9 @@ app.get('/api/campaigns/:id/characters', authMiddleware, async (req, res) => {
     .select('user_id, role, character_id')
     .eq('campaign_id', req.params.id)
     .neq('character_id', null);
+
+  if (!members || members.length === 0) return res.json([]);
+
   const characters = [];
   for (const m of members) {
     if (m.character_id && m.role === 'player') {
