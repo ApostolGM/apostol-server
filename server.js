@@ -36,6 +36,15 @@ function authMiddleware(req, res, next) {
   } catch { res.status(401).json({ error: 'Токен недействителен' }); }
 }
 
+// Middleware для проверки роли admin
+async function adminMiddleware(req, res, next) {
+  const { data: userData } = await supabase.from('users').select('role').eq('id', req.user.id).single();
+  if (!userData || userData.role !== 'admin') {
+    return res.status(403).json({ error: 'Только для администратора' });
+  }
+  next();
+}
+
 const activeUsers = new Map();
 
 io.on('connection', (socket) => {
@@ -89,7 +98,7 @@ app.post('/api/auth/register', async (req, res) => {
   const { data: ex } = await supabase.from('users').select('id').eq('username', username).single();
   if (ex) return res.status(409).json({ error: 'Пользователь уже существует' });
   const hash = await bcrypt.hash(password, 10);
-  const { data: user, error } = await supabase.from('users').insert({ username, password_hash: hash }).select('id, username, avatar_url').single();
+  const { data: user, error } = await supabase.from('users').insert({ username, password_hash: hash, role: 'player' }).select('id, username, avatar_url, role').single();
   if (error) return res.status(500).json({ error: error.message });
   const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: '30d' });
   res.json({ user, token });
@@ -99,15 +108,15 @@ app.post('/api/auth/login', async (req, res) => {
   const { data: user } = await supabase.from('users').select('*').eq('username', username).single();
   if (!user || !await bcrypt.compare(password, user.password_hash)) return res.status(401).json({ error: 'Неверный логин или пароль' });
   const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: '30d' });
-  res.json({ user: { id: user.id, username: user.username, avatar_url: user.avatar_url }, token });
+  res.json({ user: { id: user.id, username: user.username, avatar_url: user.avatar_url, role: user.role }, token });
 });
 app.get('/api/auth/me', authMiddleware, async (req, res) => {
-  const { data: user } = await supabase.from('users').select('id, username, avatar_url').eq('id', req.user.id).single();
+  const { data: user } = await supabase.from('users').select('id, username, avatar_url, role').eq('id', req.user.id).single();
   res.json(user);
 });
 
-// ===== CAMPAIGNS =====
-app.post('/api/campaigns', authMiddleware, async (req, res) => {
+// ===== CAMPAIGNS (только admin) =====
+app.post('/api/campaigns', authMiddleware, adminMiddleware, async (req, res) => {
   const { title } = req.body;
   const invite_code = uuidv4().substring(0, 8);
   const { data: c, error } = await supabase.from('campaigns').insert({ title, master_id: req.user.id, invite_code }).select().single();
@@ -139,8 +148,6 @@ app.get('/api/campaigns/:id', authMiddleware, async (req, res) => {
     .eq('campaign_id', c.id);
   res.json({ ...c, members });
 });
-
-// ===== CAMPAIGN TIME =====
 app.put('/api/campaigns/:id/time', authMiddleware, async (req, res) => {
   const { game_time_date, game_time_hours, game_time_minutes } = req.body;
   const updates = {};
@@ -283,7 +290,7 @@ app.delete('/api/characters/:id', authMiddleware, async (req, res) => {
   res.json({ success: true });
 });
 
-// ===== CHARACTER SKILLS (MASTER) =====
+// ===== CHARACTER SKILLS =====
 app.post('/api/characters/:id/skills', authMiddleware, async (req, res) => {
   const { skill_id, modifier } = req.body;
   const { data, error } = await supabase.from('character_skills').insert({
@@ -409,7 +416,6 @@ app.post('/api/inventory/use', authMiddleware, async (req, res) => {
     if (nq <= 0) { await supabase.from('inventory_slots').delete().eq('id', slot_id); result = { used: 'consumable', deleted: true, action: 'использовал' }; }
     else { await supabase.from('inventory_slots').update({ quantity: nq }).eq('id', slot_id); result = { used: 'consumable', remaining: nq, action: 'использовал' }; }
   } else return res.status(400).json({ error: 'Нельзя использовать' });
-
   const { data: charCampaign } = await supabase.from('characters').select('campaign_id').eq('id', slot.character_id).single();
   if (charCampaign?.campaign_id) {
     const msgText = `${ch.name} ${result.action} ${item.name}`;
@@ -644,13 +650,9 @@ app.post('/api/upload/file', authMiddleware, async (req, res) => {
     const result = await response.json();
     if (result.success) {
       const url = result.data.url;
-      if (campaign_id) {
-        await supabase.from('backgrounds').insert({ campaign_id, name, url });
-      }
+      if (campaign_id) await supabase.from('backgrounds').insert({ campaign_id, name, url });
       res.json({ url, name, success: true });
-    } else {
-      res.status(500).json({ error: 'Ошибка загрузки на ImgBB' });
-    }
+    } else res.status(500).json({ error: 'Ошибка загрузки на ImgBB' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -746,43 +748,43 @@ app.delete('/api/sounds/:id', authMiddleware, async (req, res) => {
   res.json({ success: true });
 });
 
-// ===== АДМИН-ПАНЕЛЬ =====
-app.get('/api/admin/items', authMiddleware, async (req, res) => {
+// ===== АДМИН-ПАНЕЛЬ (только admin) =====
+app.get('/api/admin/items', authMiddleware, adminMiddleware, async (req, res) => {
   const { data } = await supabase.from('items').select('*').order('name');
   res.json(data || []);
 });
-app.put('/api/admin/items/:id', authMiddleware, async (req, res) => {
+app.put('/api/admin/items/:id', authMiddleware, adminMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('items').update(req.body).eq('id', req.params.id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
-app.delete('/api/admin/items/:id', authMiddleware, async (req, res) => {
+app.delete('/api/admin/items/:id', authMiddleware, adminMiddleware, async (req, res) => {
   await supabase.from('items').delete().eq('id', req.params.id);
   res.json({ success: true });
 });
-app.get('/api/admin/perks', authMiddleware, async (req, res) => {
+app.get('/api/admin/perks', authMiddleware, adminMiddleware, async (req, res) => {
   const { data } = await supabase.from('perks').select('*').order('name');
   res.json(data || []);
 });
-app.put('/api/admin/perks/:id', authMiddleware, async (req, res) => {
+app.put('/api/admin/perks/:id', authMiddleware, adminMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('perks').update(req.body).eq('id', req.params.id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
-app.get('/api/admin/professions', authMiddleware, async (req, res) => {
+app.get('/api/admin/professions', authMiddleware, adminMiddleware, async (req, res) => {
   const { data } = await supabase.from('professions').select('*').order('name');
   res.json(data || []);
 });
-app.put('/api/admin/professions/:id', authMiddleware, async (req, res) => {
+app.put('/api/admin/professions/:id', authMiddleware, adminMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('professions').update(req.body).eq('id', req.params.id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
-app.get('/api/admin/skills', authMiddleware, async (req, res) => {
+app.get('/api/admin/skills', authMiddleware, adminMiddleware, async (req, res) => {
   const { data } = await supabase.from('skills').select('*').order('name');
   res.json(data || []);
 });
-app.put('/api/admin/skills/:id', authMiddleware, async (req, res) => {
+app.put('/api/admin/skills/:id', authMiddleware, adminMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('skills').update(req.body).eq('id', req.params.id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
