@@ -290,8 +290,19 @@ app.put('/api/characters/:id/params', authMiddleware, async (req, res) => {
   const allowed = ['food','water','stress','game_time_date','game_time_hours','game_time_minutes','carry_weight_max'];
   const updates = {};
   for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
-  const { data, error } = await supabase.from('characters').update(updates).eq('id', req.params.id).select().single();
+
+  const { data, error } = await supabase.from('characters').update(updates).eq('id', req.params.id).select('*').single();
   if (error) return res.status(500).json({ error: error.message });
+
+  // Отправляем WebSocket-событие всем в кампании
+  const { data: ch } = await supabase.from('characters').select('campaign_id').eq('id', req.params.id).single();
+  if (ch?.campaign_id) {
+    io.to(`campaign:${ch.campaign_id}`).emit('character_updated', {
+      character_id: req.params.id,
+      updates
+    });
+  }
+
   res.json(data);
 });
 
