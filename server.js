@@ -39,6 +39,9 @@ function authMiddleware(req, res, next) {
 const activeUsers = new Map();
 
 io.on('connection', (socket) => {
+  socket.on('scene_portals', (data) => {
+  socket.to(`campaign:${data.campaignId}`).emit('scene_portals', data);
+});
   socket.on('join_campaign', ({ userId, campaignId }) => {
     socket.join(`campaign:${campaignId}`);
     activeUsers.set(userId, { socketId: socket.id, campaignId });
@@ -591,7 +594,7 @@ app.get('/api/scenes/:campaign_id', authMiddleware, async (req, res) => {
   res.json(data || []);
 });
 app.put('/api/scenes/:campaign_id', authMiddleware, async (req, res) => {
-  const { scene_type, background_url, fog_of_war, tokens, drawings } = req.body;
+  const { scene_type, background_url, fog_of_war, tokens, drawings, portals } = req.body;
   if (!scene_type) return res.status(400).json({ error: 'scene_type обязателен' });
   const { data: existing } = await supabase.from('scenes').select('id').eq('campaign_id', req.params.campaign_id).eq('scene_type', scene_type).single();
   if (existing) {
@@ -600,13 +603,14 @@ app.put('/api/scenes/:campaign_id', authMiddleware, async (req, res) => {
     if (fog_of_war !== undefined) updates.fog_of_war = fog_of_war;
     if (tokens !== undefined) updates.tokens = tokens;
     if (drawings !== undefined) updates.drawings = drawings;
+    if (portals !== undefined) updates.portals = portals;
     const { data, error } = await supabase.from('scenes').update(updates).eq('id', existing.id).select().single();
     if (error) return res.status(500).json({ error: error.message });
     return res.json(data);
   } else {
     const { data, error } = await supabase.from('scenes').insert({
       campaign_id: req.params.campaign_id, scene_type, background_url: background_url || null,
-      fog_of_war: fog_of_war || [], tokens: tokens || [], drawings: drawings || []
+      fog_of_war: fog_of_war || [], tokens: tokens || [], drawings: drawings || [], portals: portals || []
     }).select().single();
     if (error) return res.status(500).json({ error: error.message });
     return res.json(data);
