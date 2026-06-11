@@ -122,8 +122,9 @@ app.get('/api/campaigns', authMiddleware, async (req, res) => {
 app.get('/api/campaigns/:id', authMiddleware, async (req, res) => {
   const { data: c } = await supabase.from('campaigns').select('*').eq('id', req.params.id).single();
   if (!c) return res.status(404).json({ error: 'Не найдена' });
-  const { data: members } = await supabase.from('campaign_members').select('user_id, role, character_id').eq('campaign_id', c.id);
-  res.json({ ...c, members });
+ const { data: members } = await supabase.from('campaign_members')
+  .select('user_id, role, character_id, user:users(username)')
+  .eq('campaign_id', c.id);  res.json({ ...c, members });
 });
 
 // ===== MASTER: CHARACTERS =====
@@ -162,7 +163,52 @@ app.get('/api/campaigns/:id/characters', authMiddleware, async (req, res) => {
   }
   res.json(characters);
 });
+app.delete('/api/characters/:id', authMiddleware, async (req, res) => {
+  const { data: ch } = await supabase.from('characters').select('campaign_id, user_id').eq('id', req.params.id).single();
+  if (!ch) return res.status(404).json({ error: 'Персонаж не найден' });
 
+  // Проверяем что пользователь — мастер в этой кампании
+  const { data: member } = await supabase.from('campaign_members')
+    .select('role').eq('campaign_id', ch.campaign_id).eq('user_id', req.user.id).single();
+  if (!member || !['master', 'co-master'].includes(member.role)) {
+    return res.status(403).json({ error: 'Только для Мастера' });
+  }
+
+  // Удаляем связь с членом кампании
+  await supabase.from('campaign_members').update({ character_id: null }).eq('character_id', req.params.id);
+  // Удаляем инвентарь
+  await supabase.from('inventory_slots').delete().eq('character_id', req.params.id);
+  // Удаляем навыки
+  await supabase.from('character_skills').delete().eq('character_id', req.params.id);
+  // Удаляем перки
+  await supabase.from('character_perks').delete().eq('character_id', req.params.id);
+  // Удаляем персонажа
+  await supabase.from('characters').delete().eq('id', req.params.id);
+
+  res.json({ success: true });
+});
+// Навыки персонажа (мастер)
+app.post('/api/characters/:id/skills', authMiddleware, async (req, res) => {
+  const { skill_id, modifier } = req.body;
+  const { data, error } = await supabase.from('character_skills').insert({
+    character_id: req.params.id, skill_id, modifier: modifier || 0
+  }).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.put('/api/characters/:id/skills/:skillId', authMiddleware, async (req, res) => {
+  const { modifier } = req.body;
+  const { data, error } = await supabase.from('character_skills')
+    .update({ modifier }).eq('character_id', req.params.id).eq('skill_id', req.params.skillId).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.delete('/api/characters/:id/skills/:skillId', authMiddleware, async (req, res) => {
+  await supabase.from('character_skills').delete().eq('character_id', req.params.id).eq('skill_id', req.params.skillId);
+  res.json({ success: true });
+});
 // ===== PROFESSIONS / PERKS / SKILLS =====
 app.get('/api/professions', authMiddleware, async (req, res) => {
   const { data } = await supabase.from('professions').select('*').eq('is_global', true);
@@ -593,6 +639,17 @@ app.post('/api/chat/:campaign_id', authMiddleware, async (req, res) => {
   // Отправляем через WebSocket
   io.to(`campaign:${req.params.campaign_id}`).emit('chat_message', data);
   
+  res.json(data);
+});
+// ===== КАМПАНИЯ: ВРЕМЯ =====
+app.put('/api/campaigns/:id/time', authMiddleware, async (req, res) => {
+  const { game_time_date, game_time_hours, game_time_minutes } = req.body;
+  const updates = {};
+  if (game_time_date !== undefined) updates.game_time_date = game_time_date;
+  if (game_time_hours !== undefined) updates.game_time_hours = game_time_hours;
+  if (game_time_minutes !== undefined) updates.game_time_minutes = game_time_minutes;
+  const { data, error } = await supabase.from('campaigns').update(updates).eq('id', req.params.id).select().single();
+  if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
