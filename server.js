@@ -703,6 +703,162 @@ app.post('/api/upload/file', authMiddleware, async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+// ===== ЗАМЕТКИ МАСТЕРА =====
+app.get('/api/notes/:campaign_id', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('master_notes')
+    .select('*')
+    .eq('campaign_id', req.params.campaign_id)
+    .order('order_index', { ascending: true })
+    .order('created_at', { ascending: false });
+  res.json(data || []);
+});
+
+app.post('/api/notes', authMiddleware, async (req, res) => {
+  const { campaign_id, parent_id, title, content, image_url, tags, world, region, city, location, is_pinned } = req.body;
+  const { data, error } = await supabase.from('master_notes').insert({
+    campaign_id, parent_id: parent_id || null, title, content: content || '', image_url,
+    tags: tags || [], world, region, city, location, is_pinned: is_pinned || false
+  }).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.put('/api/notes/:id', authMiddleware, async (req, res) => {
+  const { title, content, image_url, tags, world, region, city, location, is_pinned, parent_id } = req.body;
+  const updates = {};
+  if (title !== undefined) updates.title = title;
+  if (content !== undefined) updates.content = content;
+  if (image_url !== undefined) updates.image_url = image_url;
+  if (tags !== undefined) updates.tags = tags;
+  if (world !== undefined) updates.world = world;
+  if (region !== undefined) updates.region = region;
+  if (city !== undefined) updates.city = city;
+  if (location !== undefined) updates.location = location;
+  if (is_pinned !== undefined) updates.is_pinned = is_pinned;
+  if (parent_id !== undefined) updates.parent_id = parent_id;
+  updates.updated_at = new Date();
+
+  const { data, error } = await supabase.from('master_notes').update(updates).eq('id', req.params.id).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.delete('/api/notes/:id', authMiddleware, async (req, res) => {
+  await supabase.from('master_notes').delete().eq('id', req.params.id);
+  res.json({ success: true });
+});
+
+// ===== ХЕНДАУТЫ =====
+app.get('/api/handouts/:campaign_id', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('handouts')
+    .select('*')
+    .eq('campaign_id', req.params.campaign_id)
+    .order('created_at', { ascending: false });
+  res.json(data || []);
+});
+
+app.post('/api/handouts', authMiddleware, async (req, res) => {
+  const { campaign_id, title, content, image_url, category, is_visible } = req.body;
+  const { data, error } = await supabase.from('handouts').insert({
+    campaign_id, title, content: content || '', image_url, category: category || 'общее',
+    is_visible: is_visible !== undefined ? is_visible : false
+  }).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.put('/api/handouts/:id', authMiddleware, async (req, res) => {
+  const { title, content, image_url, category, is_visible } = req.body;
+  const updates = {};
+  if (title !== undefined) updates.title = title;
+  if (content !== undefined) updates.content = content;
+  if (image_url !== undefined) updates.image_url = image_url;
+  if (category !== undefined) updates.category = category;
+  if (is_visible !== undefined) updates.is_visible = is_visible;
+
+  const { data, error } = await supabase.from('handouts').update(updates).eq('id', req.params.id).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.delete('/api/handouts/:id', authMiddleware, async (req, res) => {
+  await supabase.from('handouts').delete().eq('id', req.params.id);
+  res.json({ success: true });
+});
+
+// ===== СОУНДПАД =====
+app.get('/api/sounds/:campaign_id', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('sounds')
+    .select('*')
+    .or(`campaign_id.eq.${req.params.campaign_id},is_global.eq.true`)
+    .order('name', { ascending: true });
+  res.json(data || []);
+});
+
+app.post('/api/sounds', authMiddleware, async (req, res) => {
+  const { campaign_id, name, file_url, source_type, duration, category } = req.body;
+  const { data, error } = await supabase.from('sounds').insert({
+    campaign_id, name, file_url, source_type: source_type || 'url',
+    duration: duration || 0, category: category || 'общее', is_global: false
+  }).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.delete('/api/sounds/:id', authMiddleware, async (req, res) => {
+  await supabase.from('sounds').delete().eq('id', req.params.id);
+  res.json({ success: true });
+});
+
+// ===== АДМИН-ПАНЕЛЬ (управление БД) =====
+app.get('/api/admin/items', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('items').select('*').order('name');
+  res.json(data || []);
+});
+
+app.put('/api/admin/items/:id', authMiddleware, async (req, res) => {
+  const { data, error } = await supabase.from('items').update(req.body).eq('id', req.params.id).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.delete('/api/admin/items/:id', authMiddleware, async (req, res) => {
+  await supabase.from('items').delete().eq('id', req.params.id);
+  res.json({ success: true });
+});
+
+app.get('/api/admin/perks', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('perks').select('*').order('name');
+  res.json(data || []);
+});
+
+app.put('/api/admin/perks/:id', authMiddleware, async (req, res) => {
+  const { data, error } = await supabase.from('perks').update(req.body).eq('id', req.params.id).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.get('/api/admin/professions', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('professions').select('*').order('name');
+  res.json(data || []);
+});
+
+app.put('/api/admin/professions/:id', authMiddleware, async (req, res) => {
+  const { data, error } = await supabase.from('professions').update(req.body).eq('id', req.params.id).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.get('/api/admin/skills', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('skills').select('*').order('name');
+  res.json(data || []);
+});
+
+app.put('/api/admin/skills/:id', authMiddleware, async (req, res) => {
+  const { data, error } = await supabase.from('skills').update(req.body).eq('id', req.params.id).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.PORT || 3000;
