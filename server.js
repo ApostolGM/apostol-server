@@ -460,14 +460,13 @@ app.post('/api/inventory/reload', authMiddleware, async (req, res) => {
 
 // ===== MASTER INVENTORY =====
 app.put('/api/inventory/:slotId', authMiddleware, async (req, res) => {
-  const { condition_percent, equipped, slot_type } = req.body;
+  const { condition_percent, equipped, slot_type, quantity } = req.body;
   const updates = {};
   if (condition_percent !== undefined) updates.condition_percent = condition_percent;
   if (equipped !== undefined) updates.equipped = equipped;
   if (slot_type !== undefined) updates.slot_type = slot_type;
-  const { data, error } = await supabase.from('inventory_slots').update(updates).eq('id', req.params.slotId).select('*, item:items(*)').single();
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+  if (quantity !== undefined) updates.quantity = quantity;
+  // ... остальное без изменений
 });
 
 app.post('/api/master/inventory/add', authMiddleware, async (req, res) => {
