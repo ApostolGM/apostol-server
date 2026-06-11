@@ -22,7 +22,7 @@ app.use(cors({
   origin: 'https://apostol.onrender.com',
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -39,9 +39,6 @@ function authMiddleware(req, res, next) {
 const activeUsers = new Map();
 
 io.on('connection', (socket) => {
-  socket.on('scene_portals', (data) => {
-  socket.to(`campaign:${data.campaignId}`).emit('scene_portals', data);
-});
   socket.on('join_campaign', ({ userId, campaignId }) => {
     socket.join(`campaign:${campaignId}`);
     activeUsers.set(userId, { socketId: socket.id, campaignId });
@@ -66,6 +63,18 @@ io.on('connection', (socket) => {
   });
   socket.on('scene_update', (data) => {
     socket.to(`campaign:${data.campaignId}`).emit('scene_updated', data);
+  });
+  socket.on('scene_drawings', (data) => {
+    socket.to(`campaign:${data.campaignId}`).emit('scene_drawings', data);
+  });
+  socket.on('scene_portals', (data) => {
+    socket.to(`campaign:${data.campaignId}`).emit('scene_portals', data);
+  });
+  socket.on('sound_play', (data) => {
+    socket.to(`campaign:${data.campaignId}`).emit('sound_play', data);
+  });
+  socket.on('sound_stop', (data) => {
+    socket.to(`campaign:${data.campaignId}`).emit('sound_stop', data);
   });
   socket.on('set_role', (role) => { socket.data.role = role; });
   socket.on('disconnect', () => {
@@ -125,18 +134,29 @@ app.get('/api/campaigns', authMiddleware, async (req, res) => {
 app.get('/api/campaigns/:id', authMiddleware, async (req, res) => {
   const { data: c } = await supabase.from('campaigns').select('*').eq('id', req.params.id).single();
   if (!c) return res.status(404).json({ error: 'Не найдена' });
- const { data: members } = await supabase.from('campaign_members')
-  .select('user_id, role, character_id, user:users(username)')
-  .eq('campaign_id', c.id);  res.json({ ...c, members });
+  const { data: members } = await supabase.from('campaign_members')
+    .select('user_id, role, character_id, user:users(username)')
+    .eq('campaign_id', c.id);
+  res.json({ ...c, members });
+});
+
+// ===== CAMPAIGN TIME =====
+app.put('/api/campaigns/:id/time', authMiddleware, async (req, res) => {
+  const { game_time_date, game_time_hours, game_time_minutes } = req.body;
+  const updates = {};
+  if (game_time_date !== undefined) updates.game_time_date = game_time_date;
+  if (game_time_hours !== undefined) updates.game_time_hours = game_time_hours;
+  if (game_time_minutes !== undefined) updates.game_time_minutes = game_time_minutes;
+  const { data, error } = await supabase.from('campaigns').update(updates).eq('id', req.params.id).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
 });
 
 // ===== MASTER: CHARACTERS =====
 app.get('/api/campaigns/:id/characters', authMiddleware, async (req, res) => {
   const { data: member } = await supabase.from('campaign_members')
     .select('role').eq('campaign_id', req.params.id).eq('user_id', req.user.id).single();
-  if (!member || !['master', 'co-master'].includes(member.role)) {
-    return res.status(403).json({ error: 'Только для Мастера' });
-  }
+  if (!member || !['master', 'co-master'].includes(member.role)) return res.status(403).json({ error: 'Только для Мастера' });
   const { data: members } = await supabase.from('campaign_members')
     .select('user_id, role, character_id')
     .eq('campaign_id', req.params.id)
@@ -166,52 +186,7 @@ app.get('/api/campaigns/:id/characters', authMiddleware, async (req, res) => {
   }
   res.json(characters);
 });
-app.delete('/api/characters/:id', authMiddleware, async (req, res) => {
-  const { data: ch } = await supabase.from('characters').select('campaign_id, user_id').eq('id', req.params.id).single();
-  if (!ch) return res.status(404).json({ error: 'Персонаж не найден' });
 
-  // Проверяем что пользователь — мастер в этой кампании
-  const { data: member } = await supabase.from('campaign_members')
-    .select('role').eq('campaign_id', ch.campaign_id).eq('user_id', req.user.id).single();
-  if (!member || !['master', 'co-master'].includes(member.role)) {
-    return res.status(403).json({ error: 'Только для Мастера' });
-  }
-
-  // Удаляем связь с членом кампании
-  await supabase.from('campaign_members').update({ character_id: null }).eq('character_id', req.params.id);
-  // Удаляем инвентарь
-  await supabase.from('inventory_slots').delete().eq('character_id', req.params.id);
-  // Удаляем навыки
-  await supabase.from('character_skills').delete().eq('character_id', req.params.id);
-  // Удаляем перки
-  await supabase.from('character_perks').delete().eq('character_id', req.params.id);
-  // Удаляем персонажа
-  await supabase.from('characters').delete().eq('id', req.params.id);
-
-  res.json({ success: true });
-});
-// Навыки персонажа (мастер)
-app.post('/api/characters/:id/skills', authMiddleware, async (req, res) => {
-  const { skill_id, modifier } = req.body;
-  const { data, error } = await supabase.from('character_skills').insert({
-    character_id: req.params.id, skill_id, modifier: modifier || 0
-  }).select().single();
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-
-app.put('/api/characters/:id/skills/:skillId', authMiddleware, async (req, res) => {
-  const { modifier } = req.body;
-  const { data, error } = await supabase.from('character_skills')
-    .update({ modifier }).eq('character_id', req.params.id).eq('skill_id', req.params.skillId).select().single();
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-
-app.delete('/api/characters/:id/skills/:skillId', authMiddleware, async (req, res) => {
-  await supabase.from('character_skills').delete().eq('character_id', req.params.id).eq('skill_id', req.params.skillId);
-  res.json({ success: true });
-});
 // ===== PROFESSIONS / PERKS / SKILLS =====
 app.get('/api/professions', authMiddleware, async (req, res) => {
   const { data } = await supabase.from('professions').select('*').eq('is_global', true);
@@ -229,13 +204,9 @@ app.get('/api/skills', authMiddleware, async (req, res) => {
 // ===== CHARACTERS =====
 app.post('/api/characters', authMiddleware, async (req, res) => {
   const { campaign_id, name, profession_id, perk_ids } = req.body;
-
   const { data: member } = await supabase.from('campaign_members')
     .select('role').eq('campaign_id', campaign_id).eq('user_id', req.user.id).single();
-  if (!member || ['master', 'co-master'].includes(member.role)) {
-    return res.status(403).json({ error: 'Мастер не может создавать персонажа' });
-  }
-
+  if (!member || ['master', 'co-master'].includes(member.role)) return res.status(403).json({ error: 'Мастер не может создавать персонажа' });
   const { data: prof } = await supabase.from('professions').select('*').eq('id', profession_id).single();
   if (!prof) return res.status(400).json({ error: 'Профессия не найдена' });
   let bp = 10;
@@ -249,8 +220,7 @@ app.post('/api/characters', authMiddleware, async (req, res) => {
   }
   if (perk_ids?.length) for (const pid of perk_ids) await supabase.from('character_perks').insert({ character_id: ch.id, perk_id: pid });
   await supabase.from('campaign_members').update({ character_id: ch.id }).eq('campaign_id', campaign_id).eq('user_id', req.user.id);
-  
-  // Возвращаем персонажа с перками и навыками сразу
+
   const { data: createdChar } = await supabase.from('characters').select('*').eq('id', ch.id).single();
   const { data: createdProf } = await supabase.from('professions').select('*').eq('id', createdChar.profession_id).single();
   const { data: createdCp } = await supabase.from('character_perks').select('perk_id').eq('character_id', ch.id);
@@ -264,7 +234,6 @@ app.post('/api/characters', authMiddleware, async (req, res) => {
     const { data: sd } = await supabase.from('skills').select('*').in('id', createdSIds);
     createdSkills = (sd || []).map(s => ({ ...s, modifier: (createdCs || []).find(e => e.skill_id === s.id)?.modifier || 0 }));
   }
-  
   res.json({ ...createdChar, profession: createdProf, perks: createdPerks, skills: createdSkills, inventory: [] });
 });
 
@@ -289,24 +258,50 @@ app.get('/api/characters/:id', authMiddleware, async (req, res) => {
   const { data: inv } = await supabase.from('inventory_slots').select('*, item:items(*)').eq('character_id', ch.id);
   res.json({ ...ch, profession: prof, perks, skills, inventory: inv || [] });
 });
+
 app.put('/api/characters/:id/params', authMiddleware, async (req, res) => {
   const allowed = ['food','water','stress','game_time_date','game_time_hours','game_time_minutes','carry_weight_max'];
   const updates = {};
   for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
-
   const { data, error } = await supabase.from('characters').update(updates).eq('id', req.params.id).select('*').single();
   if (error) return res.status(500).json({ error: error.message });
-
-  // Отправляем WebSocket-событие всем в кампании
-  const { data: ch } = await supabase.from('characters').select('campaign_id').eq('id', req.params.id).single();
-  if (ch?.campaign_id) {
-    io.to(`campaign:${ch.campaign_id}`).emit('character_updated', {
-      character_id: req.params.id,
-      updates
-    });
-  }
-
+  if (data?.campaign_id) io.to(`campaign:${data.campaign_id}`).emit('character_updated', { character_id: req.params.id, updates });
   res.json(data);
+});
+
+app.delete('/api/characters/:id', authMiddleware, async (req, res) => {
+  const { data: ch } = await supabase.from('characters').select('campaign_id, user_id').eq('id', req.params.id).single();
+  if (!ch) return res.status(404).json({ error: 'Персонаж не найден' });
+  const { data: member } = await supabase.from('campaign_members')
+    .select('role').eq('campaign_id', ch.campaign_id).eq('user_id', req.user.id).single();
+  if (!member || !['master', 'co-master'].includes(member.role)) return res.status(403).json({ error: 'Только для Мастера' });
+  await supabase.from('campaign_members').update({ character_id: null }).eq('character_id', req.params.id);
+  await supabase.from('inventory_slots').delete().eq('character_id', req.params.id);
+  await supabase.from('character_skills').delete().eq('character_id', req.params.id);
+  await supabase.from('character_perks').delete().eq('character_id', req.params.id);
+  await supabase.from('characters').delete().eq('id', req.params.id);
+  res.json({ success: true });
+});
+
+// ===== CHARACTER SKILLS (MASTER) =====
+app.post('/api/characters/:id/skills', authMiddleware, async (req, res) => {
+  const { skill_id, modifier } = req.body;
+  const { data, error } = await supabase.from('character_skills').insert({
+    character_id: req.params.id, skill_id, modifier: modifier || 0
+  }).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+app.put('/api/characters/:id/skills/:skillId', authMiddleware, async (req, res) => {
+  const { modifier } = req.body;
+  const { data, error } = await supabase.from('character_skills')
+    .update({ modifier }).eq('character_id', req.params.id).eq('skill_id', req.params.skillId).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+app.delete('/api/characters/:id/skills/:skillId', authMiddleware, async (req, res) => {
+  await supabase.from('character_skills').delete().eq('character_id', req.params.id).eq('skill_id', req.params.skillId);
+  res.json({ success: true });
 });
 
 // ===== INVENTORY (PLAYER) =====
@@ -350,7 +345,7 @@ app.post('/api/inventory/equip', authMiddleware, async (req, res) => {
     let usedSlots = 0;
     for (const h of hands) usedSlots += (h.item?.is_heavy ? 2 : 1);
     const needed = item.is_heavy ? 2 : 1;
-    if (usedSlots + needed > 2) return res.status(400).json({ error: 'Не хватает слотов рук. Снимите оружие.' });
+    if (usedSlots + needed > 2) return res.status(400).json({ error: 'Не хватает слотов рук' });
     if (item.is_heavy) {
       for (const h of hands) await supabase.from('inventory_slots').update({ equipped: false, slot_type: 'рюкзак' }).eq('id', h.id);
       const { data, error } = await supabase.from('inventory_slots').update({ equipped: true, slot_type: 'правая_рука' }).eq('id', slot_id).select('*, item:items(*)').single();
@@ -402,7 +397,6 @@ app.post('/api/inventory/use', authMiddleware, async (req, res) => {
   if (!ch || ch.user_id !== req.user.id) return res.status(403).json({ error: 'Не ваш персонаж' });
   const item = slot.item;
   let result = null;
-  
   if (item.weapon_type === 'ranged' && slot.equipped) {
     if ((item.current_ammo || 0) <= 0) return res.status(400).json({ error: 'Нет патронов' });
     await supabase.from('items').update({ current_ammo: (item.current_ammo || 1) - 1 }).eq('id', item.id);
@@ -412,29 +406,19 @@ app.post('/api/inventory/use', authMiddleware, async (req, res) => {
     result = { used: 'thrown', deleted: true, action: 'метнул' };
   } else if (item.type === 'расходник') {
     const nq = slot.quantity - 1;
-    if (nq <= 0) {
-      await supabase.from('inventory_slots').delete().eq('id', slot_id);
-      result = { used: 'consumable', deleted: true, action: 'использовал' };
-    } else {
-      await supabase.from('inventory_slots').update({ quantity: nq }).eq('id', slot_id);
-      result = { used: 'consumable', remaining: nq, action: 'использовал' };
-    }
-  } else {
-    return res.status(400).json({ error: 'Нельзя использовать' });
+    if (nq <= 0) { await supabase.from('inventory_slots').delete().eq('id', slot_id); result = { used: 'consumable', deleted: true, action: 'использовал' }; }
+    else { await supabase.from('inventory_slots').update({ quantity: nq }).eq('id', slot_id); result = { used: 'consumable', remaining: nq, action: 'использовал' }; }
+  } else return res.status(400).json({ error: 'Нельзя использовать' });
+
+  const { data: charCampaign } = await supabase.from('characters').select('campaign_id').eq('id', slot.character_id).single();
+  if (charCampaign?.campaign_id) {
+    const msgText = `${ch.name} ${result.action} ${item.name}`;
+    const { data: msg } = await supabase.from('chat_messages').insert({
+      campaign_id: charCampaign.campaign_id, user_id: req.user.id,
+      username: ch.name, text: msgText, is_roll: false
+    }).select().single();
+    if (msg) io.to(`campaign:${charCampaign.campaign_id}`).emit('chat_message', msg);
   }
-  
-  // Автосообщение в чат
-  const msgText = `${ch.name} ${result.action} ${item.name}`;
-  const { data: msg } = await supabase.from('chat_messages').insert({
-    campaign_id: slot.character_id ? (await supabase.from('characters').select('campaign_id').eq('id', slot.character_id).single()).data?.campaign_id : null,
-    user_id: req.user.id,
-    username: ch.name,
-    text: msgText,
-    is_roll: false
-  }).select().single();
-  
-  if (msg) io.to(`campaign:${msg.campaign_id}`).emit('chat_message', msg);
-  
   res.json(result);
 });
 app.post('/api/inventory/reload', authMiddleware, async (req, res) => {
@@ -469,9 +453,10 @@ app.put('/api/inventory/:slotId', authMiddleware, async (req, res) => {
   if (equipped !== undefined) updates.equipped = equipped;
   if (slot_type !== undefined) updates.slot_type = slot_type;
   if (quantity !== undefined) updates.quantity = quantity;
-  // ... остальное без изменений
+  const { data, error } = await supabase.from('inventory_slots').update(updates).eq('id', req.params.slotId).select('*, item:items(*)').single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
 });
-
 app.post('/api/master/inventory/add', authMiddleware, async (req, res) => {
   const { character_id, item_id, quantity, slot_type } = req.body;
   const st = slot_type || 'рюкзак';
@@ -494,7 +479,6 @@ app.post('/api/inventory/:slotId/mod', authMiddleware, async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
-
 app.delete('/api/inventory/:slotId/mod/:modItemId', authMiddleware, async (req, res) => {
   const { data: slot } = await supabase.from('inventory_slots').select('*').eq('id', req.params.slotId).single();
   if (!slot) return res.status(404).json({ error: 'Предмет не найден' });
@@ -530,10 +514,10 @@ app.delete('/api/npcs/:id', authMiddleware, async (req, res) => {
 app.post('/api/npcs/:id/clone', authMiddleware, async (req, res) => {
   const { data: orig } = await supabase.from('npcs').select('*').eq('id', req.params.id).single();
   if (!orig) return res.status(404).json({ error: 'Не найден' });
-  const { data: clone, error } = await supabase.from('npcs').insert({ 
-    name: req.body.name || `${orig.name} (копия)`, type: orig.type, health_thresholds: orig.health_thresholds, 
-    skills: orig.skills, special_properties: orig.special_properties, visibility: orig.visibility, 
-    campaign_id: orig.campaign_id, is_template: false 
+  const { data: clone, error } = await supabase.from('npcs').insert({
+    name: req.body.name || `${orig.name} (копия)`, type: orig.type, health_thresholds: orig.health_thresholds,
+    skills: orig.skills, special_properties: orig.special_properties, visibility: orig.visibility,
+    campaign_id: orig.campaign_id, is_template: false
   }).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(clone);
@@ -585,6 +569,24 @@ app.post('/api/dice/auto', authMiddleware, async (req, res) => {
   res.json({ character_id, skill_name, d20roll: d20, baseModifier: skill.baseModifier||0, perkBonus: pb, totalPercent, bonus, sum, formula: `d20 (${d20}) + ${bonus} (${totalPercent}%)` });
 });
 
+// ===== CHAT =====
+app.get('/api/chat/:campaign_id', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('chat_messages')
+    .select('*').eq('campaign_id', req.params.campaign_id)
+    .order('created_at', { ascending: false }).limit(60);
+  res.json((data || []).reverse());
+});
+app.post('/api/chat/:campaign_id', authMiddleware, async (req, res) => {
+  const { text, is_roll } = req.body;
+  const { data, error } = await supabase.from('chat_messages').insert({
+    campaign_id: req.params.campaign_id, user_id: req.user.id,
+    username: req.user.username, text, is_roll: is_roll || false
+  }).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  io.to(`campaign:${req.params.campaign_id}`).emit('chat_message', data);
+  res.json(data);
+});
+
 // ===== SCENES =====
 app.get('/api/scenes/:campaign_id', authMiddleware, async (req, res) => {
   const { type } = req.query;
@@ -629,90 +631,36 @@ app.get('/api/backgrounds/:campaign_id', authMiddleware, async (req, res) => {
   const { data } = await supabase.from('backgrounds').select('*').eq('campaign_id', req.params.campaign_id);
   res.json(data || []);
 });
-// ===== CHAT =====
-app.get('/api/chat/:campaign_id', authMiddleware, async (req, res) => {
-  const { data } = await supabase.from('chat_messages')
-    .select('*')
-    .eq('campaign_id', req.params.campaign_id)
-    .order('created_at', { ascending: false })
-    .limit(60);
-  res.json((data || []).reverse());
-});
 
-app.post('/api/chat/:campaign_id', authMiddleware, async (req, res) => {
-  const { text, is_roll } = req.body;
-  const { data, error } = await supabase.from('chat_messages').insert({
-    campaign_id: req.params.campaign_id,
-    user_id: req.user.id,
-    username: req.user.username,
-    text,
-    is_roll: is_roll || false
-  }).select().single();
-  if (error) return res.status(500).json({ error: error.message });
-  
-  // Отправляем через WebSocket
-  io.to(`campaign:${req.params.campaign_id}`).emit('chat_message', data);
-  
-  res.json(data);
-});
-// ===== КАМПАНИЯ: ВРЕМЯ =====
-app.put('/api/campaigns/:id/time', authMiddleware, async (req, res) => {
-  const { game_time_date, game_time_hours, game_time_minutes } = req.body;
-  const updates = {};
-  if (game_time_date !== undefined) updates.game_time_date = game_time_date;
-  if (game_time_hours !== undefined) updates.game_time_hours = game_time_hours;
-  if (game_time_minutes !== undefined) updates.game_time_minutes = game_time_minutes;
-  const { data, error } = await supabase.from('campaigns').update(updates).eq('id', req.params.id).select().single();
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
 // ===== ЗАГРУЗКА ФАЙЛА НА IMGBB =====
 app.post('/api/upload/file', authMiddleware, async (req, res) => {
   const { image, name, campaign_id } = req.body;
   if (!image || !name) return res.status(400).json({ error: 'image и name обязательны' });
-
   try {
     const formData = new URLSearchParams();
     formData.append('key', 'e39705945412fc0b0adac9b23583bdcd');
     formData.append('image', image);
-
-    const response = await fetch('https://api.imgbb.com/1/upload', {
-      method: 'POST',
-      body: formData,
-    });
-
+    const response = await fetch('https://api.imgbb.com/1/upload', { method: 'POST', body: formData });
     const result = await response.json();
-
     if (result.success) {
       const url = result.data.url;
-
-      // Сохраняем в библиотеку фонов
       if (campaign_id) {
-        await supabase.from('backgrounds').insert({
-          campaign_id,
-          name,
-          url,
-        });
+        await supabase.from('backgrounds').insert({ campaign_id, name, url });
       }
-
       res.json({ url, name, success: true });
     } else {
       res.status(500).json({ error: 'Ошибка загрузки на ImgBB' });
     }
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
 // ===== ЗАМЕТКИ МАСТЕРА =====
 app.get('/api/notes/:campaign_id', authMiddleware, async (req, res) => {
   const { data } = await supabase.from('master_notes')
-    .select('*')
-    .eq('campaign_id', req.params.campaign_id)
-    .order('order_index', { ascending: true })
-    .order('created_at', { ascending: false });
+    .select('*').eq('campaign_id', req.params.campaign_id)
+    .order('order_index', { ascending: true }).order('created_at', { ascending: false });
   res.json(data || []);
 });
-
 app.post('/api/notes', authMiddleware, async (req, res) => {
   const { campaign_id, parent_id, title, content, image_url, tags, world, region, city, location, is_pinned } = req.body;
   const { data, error } = await supabase.from('master_notes').insert({
@@ -722,7 +670,6 @@ app.post('/api/notes', authMiddleware, async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
-
 app.put('/api/notes/:id', authMiddleware, async (req, res) => {
   const { title, content, image_url, tags, world, region, city, location, is_pinned, parent_id } = req.body;
   const updates = {};
@@ -737,12 +684,10 @@ app.put('/api/notes/:id', authMiddleware, async (req, res) => {
   if (is_pinned !== undefined) updates.is_pinned = is_pinned;
   if (parent_id !== undefined) updates.parent_id = parent_id;
   updates.updated_at = new Date();
-
   const { data, error } = await supabase.from('master_notes').update(updates).eq('id', req.params.id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
-
 app.delete('/api/notes/:id', authMiddleware, async (req, res) => {
   await supabase.from('master_notes').delete().eq('id', req.params.id);
   res.json({ success: true });
@@ -751,12 +696,9 @@ app.delete('/api/notes/:id', authMiddleware, async (req, res) => {
 // ===== ХЕНДАУТЫ =====
 app.get('/api/handouts/:campaign_id', authMiddleware, async (req, res) => {
   const { data } = await supabase.from('handouts')
-    .select('*')
-    .eq('campaign_id', req.params.campaign_id)
-    .order('created_at', { ascending: false });
+    .select('*').eq('campaign_id', req.params.campaign_id).order('created_at', { ascending: false });
   res.json(data || []);
 });
-
 app.post('/api/handouts', authMiddleware, async (req, res) => {
   const { campaign_id, title, content, image_url, category, is_visible } = req.body;
   const { data, error } = await supabase.from('handouts').insert({
@@ -766,7 +708,6 @@ app.post('/api/handouts', authMiddleware, async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
-
 app.put('/api/handouts/:id', authMiddleware, async (req, res) => {
   const { title, content, image_url, category, is_visible } = req.body;
   const updates = {};
@@ -775,12 +716,10 @@ app.put('/api/handouts/:id', authMiddleware, async (req, res) => {
   if (image_url !== undefined) updates.image_url = image_url;
   if (category !== undefined) updates.category = category;
   if (is_visible !== undefined) updates.is_visible = is_visible;
-
   const { data, error } = await supabase.from('handouts').update(updates).eq('id', req.params.id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
-
 app.delete('/api/handouts/:id', authMiddleware, async (req, res) => {
   await supabase.from('handouts').delete().eq('id', req.params.id);
   res.json({ success: true });
@@ -789,12 +728,10 @@ app.delete('/api/handouts/:id', authMiddleware, async (req, res) => {
 // ===== СОУНДПАД =====
 app.get('/api/sounds/:campaign_id', authMiddleware, async (req, res) => {
   const { data } = await supabase.from('sounds')
-    .select('*')
-    .or(`campaign_id.eq.${req.params.campaign_id},is_global.eq.true`)
+    .select('*').or(`campaign_id.eq.${req.params.campaign_id},is_global.eq.true`)
     .order('name', { ascending: true });
   res.json(data || []);
 });
-
 app.post('/api/sounds', authMiddleware, async (req, res) => {
   const { campaign_id, name, file_url, source_type, duration, category } = req.body;
   const { data, error } = await supabase.from('sounds').insert({
@@ -804,61 +741,53 @@ app.post('/api/sounds', authMiddleware, async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
-
 app.delete('/api/sounds/:id', authMiddleware, async (req, res) => {
   await supabase.from('sounds').delete().eq('id', req.params.id);
   res.json({ success: true });
 });
 
-// ===== АДМИН-ПАНЕЛЬ (управление БД) =====
+// ===== АДМИН-ПАНЕЛЬ =====
 app.get('/api/admin/items', authMiddleware, async (req, res) => {
   const { data } = await supabase.from('items').select('*').order('name');
   res.json(data || []);
 });
-
 app.put('/api/admin/items/:id', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('items').update(req.body).eq('id', req.params.id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
-
 app.delete('/api/admin/items/:id', authMiddleware, async (req, res) => {
   await supabase.from('items').delete().eq('id', req.params.id);
   res.json({ success: true });
 });
-
 app.get('/api/admin/perks', authMiddleware, async (req, res) => {
   const { data } = await supabase.from('perks').select('*').order('name');
   res.json(data || []);
 });
-
 app.put('/api/admin/perks/:id', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('perks').update(req.body).eq('id', req.params.id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
-
 app.get('/api/admin/professions', authMiddleware, async (req, res) => {
   const { data } = await supabase.from('professions').select('*').order('name');
   res.json(data || []);
 });
-
 app.put('/api/admin/professions/:id', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('professions').update(req.body).eq('id', req.params.id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
-
 app.get('/api/admin/skills', authMiddleware, async (req, res) => {
   const { data } = await supabase.from('skills').select('*').order('name');
   res.json(data || []);
 });
-
 app.put('/api/admin/skills/:id', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('skills').update(req.body).eq('id', req.params.id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
+
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.PORT || 3000;
