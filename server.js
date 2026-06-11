@@ -666,6 +666,43 @@ app.put('/api/campaigns/:id/time', authMiddleware, async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
+// ===== ЗАГРУЗКА ФАЙЛА НА IMGBB =====
+app.post('/api/upload/file', authMiddleware, async (req, res) => {
+  const { image, name, campaign_id } = req.body;
+  if (!image || !name) return res.status(400).json({ error: 'image и name обязательны' });
+
+  try {
+    const formData = new URLSearchParams();
+    formData.append('key', 'e39705945412fc0b0adac9b23583bdcd');
+    formData.append('image', image);
+
+    const response = await fetch('https://api.imgbb.com/1/upload', {
+      method: 'POST',
+      body: formData,
+    });
+
+    const result = await response.json();
+
+    if (result.success) {
+      const url = result.data.url;
+
+      // Сохраняем в библиотеку фонов
+      if (campaign_id) {
+        await supabase.from('backgrounds').insert({
+          campaign_id,
+          name,
+          url,
+        });
+      }
+
+      res.json({ url, name, success: true });
+    } else {
+      res.status(500).json({ error: 'Ошибка загрузки на ImgBB' });
+    }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.PORT || 3000;
