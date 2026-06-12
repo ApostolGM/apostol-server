@@ -1,8 +1,8 @@
-// server/server/routes/auth.js
+// routes/auth.js
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { supabase, JWT_SECRET } from '../index.js';
+import { supabase } from '../index.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { validate, schemas } from '../middleware/validate.js';
 
@@ -27,7 +27,7 @@ router.post('/register', validate(schemas.register), async (req, res) => {
 
   const token = jwt.sign(
     { id: user.id, username: user.username },
-    JWT_SECRET,
+    process.env.JWT_SECRET,
     { expiresIn: '30d' }
   );
   res.json({ user, token });
@@ -45,7 +45,7 @@ router.post('/login', validate(schemas.login), async (req, res) => {
   }
   const token = jwt.sign(
     { id: user.id, username: user.username },
-    JWT_SECRET,
+    process.env.JWT_SECRET,
     { expiresIn: '30d' }
   );
   res.json({
