@@ -1,4 +1,4 @@
-// server.js (APOSTOL 2.1 — с Cloudinary)
+// server.js (APOSTOL 2.1 — ImgBB для картинок, Cloudinary для звуков)
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -188,25 +188,24 @@ app.put('/api/scenes/:campaign_id', authMiddleware, validate(schemas.updateScene
 app.post('/api/upload/background', authMiddleware, async (req, res) => { const { campaign_id, name, url, is_global } = req.body; if (!url) return res.status(400).json({ error: 'url обязателен' }); const { data, error } = await supabase.from('backgrounds').insert({ campaign_id: is_global ? null : campaign_id, name, url, is_global: is_global||false }).select().single(); if (error) return res.status(500).json({ error: error.message }); res.json(data); });
 app.get('/api/backgrounds/:campaign_id', authMiddleware, async (req, res) => { const { data } = await supabase.from('backgrounds').select('*').or(`campaign_id.eq.${req.params.campaign_id},is_global.eq.true`).order('name'); res.json(data||[]); });
 
-// ===== UPLOAD (CLOUDINARY) =====
+// ===== UPLOAD (IMGBB ДЛЯ КАРТИНОК) =====
 app.post('/api/upload/file', authMiddleware, validate(schemas.uploadFile), async (req, res) => {
   const { image, name, campaign_id } = req.body;
   try {
-    const result = await cloudinary.uploader.upload(`data:image/jpeg;base64,${image}`, {
-      folder: 'apostol',
-      public_id: name.replace(/\.[^.]+$/, ''),
-      resource_type: 'image',
-    });
-    const url = result.secure_url;
-    if (campaign_id) {
-      await supabase.from('backgrounds').insert({ campaign_id, name, url });
-    }
-    res.json({ url, name, success: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+    const formData = new URLSearchParams();
+    formData.append('key', process.env.IMGBB_API_KEY);
+    formData.append('image', image);
+    const response = await fetch('https://api.imgbb.com/1/upload', { method: 'POST', body: formData });
+    const result = await response.json();
+    if (result.success) {
+      const url = result.data.url;
+      if (campaign_id) await supabase.from('backgrounds').insert({ campaign_id, name, url });
+      res.json({ url, name, success: true });
+    } else res.status(500).json({ error: 'Ошибка загрузки на ImgBB' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ===== UPLOAD (CLOUDINARY ДЛЯ ЗВУКОВ) =====
 app.post('/api/upload/sound', authMiddleware, validate(schemas.uploadSound), async (req, res) => {
   const { sound_data, name, campaign_id, is_global } = req.body;
   try {
