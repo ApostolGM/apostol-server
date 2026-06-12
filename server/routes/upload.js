@@ -1,4 +1,4 @@
-// server/server/routes/upload.js
+// routes/upload.js
 import { Router } from 'express';
 import { supabase } from '../index.js';
 import { authMiddleware } from '../middleware/auth.js';
