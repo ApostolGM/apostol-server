@@ -1,11 +1,10 @@
-// server/server/routes/masterInventory.js
+// routes/masterInventory.js
 import { Router } from 'express';
 import { supabase } from '../index.js';
 import { authMiddleware } from '../middleware/auth.js';
 
 const router = Router();
 
-// Обновить слот инвентаря (мастер)
 router.put('/:slotId', authMiddleware, async (req, res) => {
   const { condition_percent, equipped, slot_type, quantity } = req.body;
   const updates = {};
@@ -24,7 +23,6 @@ router.put('/:slotId', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
-// Мастер добавляет предмет игроку
 router.post('/add', authMiddleware, async (req, res) => {
   const { character_id, item_id, quantity, slot_type } = req.body;
   const st = slot_type || 'рюкзак';
@@ -44,7 +42,6 @@ router.post('/add', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
-// Добавить модификацию
 router.post('/:slotId/mod', authMiddleware, async (req, res) => {
   const { mod_item_id } = req.body;
   const { data: slot } = await supabase
@@ -79,7 +76,6 @@ router.post('/:slotId/mod', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
-// Удалить модификацию
 router.delete('/:slotId/mod/:modItemId', authMiddleware, async (req, res) => {
   const { data: slot } = await supabase
     .from('inventory_slots')
