@@ -1,4 +1,3 @@
-// index.js
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -24,6 +23,16 @@ import handoutRoutes from './routes/handouts.js';
 import soundRoutes from './routes/sounds.js';
 import adminRoutes from './routes/admin.js';
 
+const requiredEnv = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'JWT_SECRET', 'IMGBB_API_KEY'];
+for (const key of requiredEnv) {
+  if (!process.env[key]) {
+    console.error(`ОШИБКА: Не задана переменная окружения ${key}`);
+    process.exit(1);
+  }
+}
+
+console.log('Переменные окружения загружены');
+
 const app = express();
 const httpServer = createServer(app);
 
@@ -32,7 +41,16 @@ export const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-const io = setupSocket(httpServer);
+console.log('Supabase подключён');
+
+let io;
+try {
+  io = setupSocket(httpServer);
+  console.log('Socket.IO настроен');
+} catch (e) {
+  console.error('ОШИБКА Socket.IO:', e.message);
+  process.exit(1);
+}
 
 app.set('io', io);
 app.set('supabase', supabase);
@@ -58,6 +76,8 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(globalLimiter);
 
+console.log('Middleware подключён');
+
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/campaigns', campaignRoutes);
 app.use('/api/characters', characterRoutes);
@@ -78,5 +98,18 @@ app.use('/api/admin', adminRoutes);
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
+console.log('Роуты подключены');
+
 const PORT = process.env.PORT || 3000;
 httpServer.listen(PORT, () => console.log(`APOSTOL 2.0 на порту ${PORT}`));
+
+process.on('uncaughtException', (err) => {
+  console.error('НЕОБРАБОТАННАЯ ОШИБКА:', err.message);
+  console.error(err.stack);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('НЕОБРАБОТАННЫЙ ПРОМИС:', reason);
+  process.exit(1);
+});
