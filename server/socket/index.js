@@ -1,4 +1,4 @@
-// server/server/socket/index.js
+// socket/index.js
 import { Server } from 'socket.io';
 import { handleChat } from './handlers/chat.js';
 import { handleScene } from './handlers/scene.js';
