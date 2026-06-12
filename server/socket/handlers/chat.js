@@ -1,4 +1,4 @@
-// server/server/socket/handlers/chat.js
+// socket/handlers/chat.js
 export function handleChat(io, socket) {
   socket.on('dice_roll', (data) => {
     const payload = { ...data, time: new Date().toISOString() };
