@@ -1,11 +1,10 @@
-// server/package.json
 {
   "name": "apostol-server",
   "version": "2.0.0",
   "type": "module",
   "scripts": {
-    "start": "node server/index.js",
-    "dev": "node --watch server/index.js"
+    "start": "node index.js",
+    "dev": "node --watch index.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
