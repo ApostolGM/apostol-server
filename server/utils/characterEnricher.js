@@ -1,4 +1,4 @@
-// server/server/utils/characterEnricher.js
+// utils/characterEnricher.js
 import { supabase } from '../index.js';
 
 export async function enrichCharacter(char) {
