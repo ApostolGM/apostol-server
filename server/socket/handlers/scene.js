@@ -1,4 +1,4 @@
-// server/server/socket/handlers/scene.js
+// socket/handlers/scene.js
 export function handleScene(io, socket) {
   socket.on('scene_token_move', (data) => {
     socket.to(`campaign:${data.campaignId}`).emit('scene_token_moved', data);
