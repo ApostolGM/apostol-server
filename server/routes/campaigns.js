@@ -1,4 +1,4 @@
-// server/server/routes/campaigns.js
+// routes/campaigns.js
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../index.js';
