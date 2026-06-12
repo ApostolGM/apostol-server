@@ -1,4 +1,4 @@
-// server/server/index.js
+// index.js
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -27,19 +27,15 @@ import adminRoutes from './routes/admin.js';
 const app = express();
 const httpServer = createServer(app);
 
-const supabase = createClient(
+export const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
-const JWT_SECRET = process.env.JWT_SECRET;
-
-export { supabase, JWT_SECRET };
 
 const io = setupSocket(httpServer);
 
 app.set('io', io);
 app.set('supabase', supabase);
-app.set('jwtSecret', JWT_SECRET);
 
 const globalLimiter = rateLimit({
   windowMs: 60 * 1000,
