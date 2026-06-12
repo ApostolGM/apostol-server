@@ -1,4 +1,4 @@
-// server/server/routes/dice.js
+// routes/dice.js
 import { Router } from 'express';
 import { supabase } from '../index.js';
 import { authMiddleware } from '../middleware/auth.js';
