@@ -1,4 +1,4 @@
-// server/server/middleware/validate.js
+// middleware/validate.js
 import Joi from 'joi';
 
 export function validate(schema, source = 'body') {
