@@ -1,4 +1,4 @@
-// server/server/utils/diceFormatter.js
+// utils/diceFormatter.js
 export function rollDice(count, sides) {
   const rolls = [];
   for (let i = 0; i < count; i++) {
