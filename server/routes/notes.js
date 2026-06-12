@@ -1,4 +1,4 @@
-// server/server/routes/notes.js
+// routes/notes.js
 import { Router } from 'express';
 import { supabase } from '../index.js';
 import { authMiddleware } from '../middleware/auth.js';
