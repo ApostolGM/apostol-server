@@ -159,7 +159,14 @@ app.post('/api/campaigns/join/:code', authMiddleware, async (req, res) => { cons
 app.get('/api/campaigns', authMiddleware, async (req, res) => { const { data: m } = await supabase.from('campaign_members').select('campaign_id').eq('user_id', req.user.id); if (!m?.length) return res.json([]); const { data } = await supabase.from('campaigns').select('*').in('id', m.map(x=>x.campaign_id)); res.json(data); });
 app.get('/api/campaigns/:id', authMiddleware, async (req, res) => { const { data: c } = await supabase.from('campaigns').select('*').eq('id', req.params.id).single(); if (!c) return res.status(404).json({ error: 'Не найдена' }); const { data: members } = await supabase.from('campaign_members').select('user_id, role, character_id, user:users(username)').eq('campaign_id', c.id); res.json({...c, members}); });
 app.put('/api/campaigns/:id/time', authMiddleware, async (req, res) => { const { game_time_date, game_time_hours, game_time_minutes } = req.body; const updates = {}; if (game_time_date !== undefined) updates.game_time_date = game_time_date; if (game_time_hours !== undefined) updates.game_time_hours = game_time_hours; if (game_time_minutes !== undefined) updates.game_time_minutes = game_time_minutes; const { data, error } = await supabase.from('campaigns').update(updates).eq('id', req.params.id).select().single(); if (error) return res.status(500).json({ error: error.message }); notifyCampaign(req.params.id, 'campaign_updated', data); res.json(data); });
-
+app.get('/api/admin/campaigns', authMiddleware, adminMiddleware, async (req, res) => {
+  const { data } = await supabase.from('campaigns').select('*, master:users(username)').order('created_at', { ascending: false });
+  res.json(data || []);
+});
+app.delete('/api/admin/campaigns/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  await supabase.from('campaigns').delete().eq('id', req.params.id);
+  res.json({ success: true });
+});
 // ===== CHARACTERS =====
 app.get('/api/campaigns/:id/characters', authMiddleware, async (req, res) => { const { data: member } = await supabase.from('campaign_members').select('role').eq('campaign_id', req.params.id).eq('user_id', req.user.id).single(); if (!member || !['master','co-master'].includes(member.role)) return res.status(403).json({ error: 'Только для Мастера' }); const { data: members } = await supabase.from('campaign_members').select('user_id, role, character_id').eq('campaign_id', req.params.id).eq('role','player').not('character_id','is',null); if (!members?.length) return res.json([]); const charIds = members.map(m=>m.character_id); const { data: chars } = await supabase.from('characters').select('*').in('id', charIds); if (!chars?.length) return res.json([]); const enriched = await enrichCharacter(chars); const enrichedWithOwner = enriched.map(ch=>{ const owner = members.find(m=>m.character_id===ch.id); return {...ch, owner_role: owner?.role, owner_id: owner?.user_id}; }); res.json(enrichedWithOwner); });
 app.get('/api/professions', authMiddleware, async (req, res) => { const { data } = await supabase.from('professions').select('*').eq('is_global', true); res.json(data); });
