@@ -75,8 +75,29 @@ const schemas = {
   updateScene: Joi.object({ scene_type: Joi.string().valid('local','global').required(), background_url: Joi.string().uri().allow(null), tokens: Joi.array(), drawings: Joi.array(), portals: Joi.array() }),
   uploadFile: Joi.object({ image: Joi.string().max(50*1024*1024).required(), name: Joi.string().required(), campaign_id: Joi.string().uuid() }),
   uploadSound: Joi.object({ sound_data: Joi.string().required(), name: Joi.string().required(), campaign_id: Joi.string().uuid().allow(null), is_global: Joi.boolean().default(false) }),
-  createItem: Joi.object({ name: Joi.string().required(), slot: Joi.string().required(), weight: Joi.number().min(0), condition_percent: Joi.number().min(0).max(100), description: Joi.string().allow(''), trade_price: Joi.number().min(0), weapon_type: Joi.string().valid('melee','ranged','thrown').allow(null), max_ammo: Joi.number().min(0), is_heavy: Joi.boolean(), ammo_type_id: Joi.string().uuid().allow(null), accepted_ammo_types: Joi.array().items(Joi.string().uuid()), mod_target: Joi.string().valid('weapon','armor','exo','any').allow(null), weapon_mod_subtype: Joi.string().valid('melee','ranged','thrown','any').allow(null) }),
-};
+  createItem: Joi.object({ 
+  name: Joi.string().required(), 
+  slot: Joi.string().required(),
+  subcategory: Joi.string().allow('', null),
+  weight: Joi.number().min(0), 
+  condition_percent: Joi.number().min(0).max(100), 
+  description: Joi.string().allow(''), 
+  trade_price: Joi.number().min(0), 
+  weapon_type: Joi.string().valid('melee','ranged','thrown').allow(null), 
+  max_ammo: Joi.number().min(0), 
+  is_heavy: Joi.boolean(), 
+  ammo_type_id: Joi.string().uuid().allow(null), 
+  accepted_ammo_types: Joi.array().items(Joi.string().uuid()), 
+  mod_target: Joi.string().valid('weapon','armor','exo','any').allow(null), 
+  weapon_mod_subtype: Joi.string().valid('melee','ranged','thrown','any').allow(null),
+  is_global: Joi.boolean().default(true),
+  is_container: Joi.boolean().default(false),
+  container_slots: Joi.number().integer().min(0).default(0),
+  container_items: Joi.array().items(Joi.object({
+    item_id: Joi.string().uuid().required(),
+    quantity: Joi.number().integer().min(1).default(1)
+  })).default([]),
+}),
 
 async function enrichCharacter(ch) {
   if (!ch) return null;
