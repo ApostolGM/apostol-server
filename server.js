@@ -368,6 +368,29 @@ app.delete('/api/admin/campaigns/:id', authMiddleware, adminMiddleware, async (r
   await supabase.from('campaigns').delete().eq('id', req.params.id);
   res.json({ success: true });
 });
+// ===== PLAYLISTS =====
+app.get('/api/playlists', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('playlists').select('*, sounds:sounds(*)').eq('is_global', true).order('name');
+  res.json(data || []);
+});
+
+app.post('/api/playlists', authMiddleware, adminMiddleware, async (req, res) => {
+  const { name } = req.body;
+  const { data, error } = await supabase.from('playlists').insert({ name, is_global: true }).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.put('/api/playlists/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  const { data, error } = await supabase.from('playlists').update(req.body).eq('id', req.params.id).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.delete('/api/playlists/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  await supabase.from('playlists').delete().eq('id', req.params.id);
+  res.json({ success: true });
+});
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
