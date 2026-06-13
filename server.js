@@ -328,6 +328,36 @@ app.get('/api/admin/backgrounds', authMiddleware, adminMiddleware, async (req, r
 app.delete('/api/admin/backgrounds/:id', authMiddleware, adminMiddleware, async (req, res) => { await supabase.from('backgrounds').delete().eq('id', req.params.id); res.json({ success: true }); });
 app.get('/api/admin/sounds', authMiddleware, adminMiddleware, async (req, res) => { const { data } = await supabase.from('sounds').select('*').eq('is_global', true).order('name'); res.json(data||[]); });
 app.delete('/api/admin/sounds/:id', authMiddleware, adminMiddleware, async (req, res) => { await supabase.from('sounds').delete().eq('id', req.params.id); res.json({ success: true }); });
+// ===== ВЫГНАТЬ ИГРОКА =====
+app.delete('/api/campaigns/:id/members/:userId', authMiddleware, async (req, res) => {
+  const { data: member } = await supabase
+    .from('campaign_members')
+    .select('role')
+    .eq('campaign_id', req.params.id)
+    .eq('user_id', req.user.id)
+    .single();
+
+  if (!member || !['master', 'co-master'].includes(member.role)) {
+    return res.status(403).json({ error: 'Только для Мастера' });
+  }
+
+  // Нельзя выгнать самого себя
+  if (req.user.id === req.params.userId) {
+    return res.status(400).json({ error: 'Нельзя выгнать самого себя' });
+  }
+
+  // Удаляем участника
+  await supabase
+    .from('campaign_members')
+    .delete()
+    .eq('campaign_id', req.params.id)
+    .eq('user_id', req.params.userId);
+
+  // Оповещаем всех в кампании
+  notifyCampaign(req.params.id, 'campaign_members_updated', { campaignId: req.params.id });
+
+  res.json({ success: true });
+});
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
