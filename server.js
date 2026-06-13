@@ -23,7 +23,13 @@ const authLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, message: { error: 
 const chatLimiter = rateLimit({ windowMs: 1000, max: 5, message: { error: 'Слишком много сообщений' } });
 const diceLimiter = rateLimit({ windowMs: 1000, max: 10, message: { error: 'Слишком много бросков' } });
 
-app.use(cors({ origin: 'https://apostol.onrender.com', allowedHeaders: ['Content-Type', 'Authorization'] }));
+app.use(cors({
+  origin: 'https://apostol.onrender.com',
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  credentials: true,
+}));
+app.options('*', cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(globalLimiter);
 
