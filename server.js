@@ -15,7 +15,11 @@ import { v2 as cloudinary } from 'cloudinary';
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: 'https://apostol.onrender.com', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+  }
 });
 
 const globalLimiter = rateLimit({ windowMs: 60 * 1000, max: 300, message: { error: 'Слишком много запросов' }, standardHeaders: true, legacyHeaders: false });
@@ -23,21 +27,10 @@ const authLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, message: { error: 
 const chatLimiter = rateLimit({ windowMs: 1000, max: 5, message: { error: 'Слишком много сообщений' } });
 const diceLimiter = rateLimit({ windowMs: 1000, max: 10, message: { error: 'Слишком много бросков' } });
 
-const allowedOrigins = [
-  'https://apostol.onrender.com',
-  'https://apostol.onrender.com/'
-];
 app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: '*',
   allowedHeaders: ['Content-Type', 'Authorization'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  credentials: true
 }));
 app.options('*', cors());
 app.use(express.json({ limit: '50mb' }));
@@ -347,6 +340,17 @@ app.get('/api/currencies', authMiddleware, async (req, res) => { const { data } 
 app.post('/api/currencies', authMiddleware, adminMiddleware, async (req, res) => { const { data, error } = await supabase.from('currencies').insert(req.body).select().single(); if (error) return res.status(500).json({ error: error.message }); res.json(data); });
 app.delete('/api/currencies/:id', authMiddleware, adminMiddleware, async (req, res) => { await supabase.from('currencies').delete().eq('id', req.params.id); res.json({ success: true }); });
 
+// ===== PLAYLISTS =====
+app.get('/api/playlists', authMiddleware, async (req, res) => { const { data } = await supabase.from('playlists').select('*, sounds:sounds(*)').eq('is_global', true).order('name'); res.json(data || []); });
+app.post('/api/playlists', authMiddleware, adminMiddleware, async (req, res) => { const { name } = req.body; const { data, error } = await supabase.from('playlists').insert({ name, is_global: true }).select().single(); if (error) return res.status(500).json({ error: error.message }); res.json(data); });
+app.put('/api/playlists/:id', authMiddleware, adminMiddleware, async (req, res) => { const { data, error } = await supabase.from('playlists').update(req.body).eq('id', req.params.id).select().single(); if (error) return res.status(500).json({ error: error.message }); res.json(data); });
+app.delete('/api/playlists/:id', authMiddleware, adminMiddleware, async (req, res) => { await supabase.from('playlists').delete().eq('id', req.params.id); res.json({ success: true }); });
+
+// ===== SUBCATEGORIES =====
+app.get('/api/subcategories', authMiddleware, async (req, res) => { const { data } = await supabase.from('subcategories').select('*').order('name'); res.json(data || []); });
+app.post('/api/subcategories', authMiddleware, adminMiddleware, async (req, res) => { const { slot, name } = req.body; const { data, error } = await supabase.from('subcategories').insert({ slot, name }).select().single(); if (error) return res.status(500).json({ error: error.message }); res.json(data); });
+app.delete('/api/subcategories/:id', authMiddleware, adminMiddleware, async (req, res) => { await supabase.from('subcategories').delete().eq('id', req.params.id); res.json({ success: true }); });
+
 // ===== ADMIN =====
 app.get('/api/admin/items', authMiddleware, adminMiddleware, async (req, res) => { const { data } = await supabase.from('items').select('*, ammo_type:ammo_types(*)').order('name'); res.json(data||[]); });
 app.post('/api/admin/items', authMiddleware, adminMiddleware, validate(schemas.createItem), async (req, res) => { const { data, error } = await supabase.from('items').insert(req.body).select().single(); if (error) return res.status(500).json({ error: error.message }); res.json(data); });
@@ -381,46 +385,6 @@ app.get('/api/admin/campaigns', authMiddleware, adminMiddleware, async (req, res
 });
 app.delete('/api/admin/campaigns/:id', authMiddleware, adminMiddleware, async (req, res) => {
   await supabase.from('campaigns').delete().eq('id', req.params.id);
-  res.json({ success: true });
-});
-// ===== PLAYLISTS =====
-app.get('/api/playlists', authMiddleware, async (req, res) => {
-  const { data } = await supabase.from('playlists').select('*, sounds:sounds(*)').eq('is_global', true).order('name');
-  res.json(data || []);
-});
-
-app.post('/api/playlists', authMiddleware, adminMiddleware, async (req, res) => {
-  const { name } = req.body;
-  const { data, error } = await supabase.from('playlists').insert({ name, is_global: true }).select().single();
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-
-app.put('/api/playlists/:id', authMiddleware, adminMiddleware, async (req, res) => {
-  const { data, error } = await supabase.from('playlists').update(req.body).eq('id', req.params.id).select().single();
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-
-app.delete('/api/playlists/:id', authMiddleware, adminMiddleware, async (req, res) => {
-  await supabase.from('playlists').delete().eq('id', req.params.id);
-  res.json({ success: true });
-});
-// ===== SUBCATEGORIES =====
-app.get('/api/subcategories', authMiddleware, async (req, res) => {
-  const { data } = await supabase.from('subcategories').select('*').order('name');
-  res.json(data || []);
-});
-
-app.post('/api/subcategories', authMiddleware, adminMiddleware, async (req, res) => {
-  const { slot, name } = req.body;
-  const { data, error } = await supabase.from('subcategories').insert({ slot, name }).select().single();
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-
-app.delete('/api/subcategories/:id', authMiddleware, adminMiddleware, async (req, res) => {
-  await supabase.from('subcategories').delete().eq('id', req.params.id);
   res.json({ success: true });
 });
 
