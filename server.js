@@ -391,6 +391,23 @@ app.delete('/api/playlists/:id', authMiddleware, adminMiddleware, async (req, re
   await supabase.from('playlists').delete().eq('id', req.params.id);
   res.json({ success: true });
 });
+// ===== SUBCATEGORIES =====
+app.get('/api/subcategories', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('subcategories').select('*').order('name');
+  res.json(data || []);
+});
+
+app.post('/api/subcategories', authMiddleware, adminMiddleware, async (req, res) => {
+  const { slot, name } = req.body;
+  const { data, error } = await supabase.from('subcategories').insert({ slot, name }).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.delete('/api/subcategories/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  await supabase.from('subcategories').delete().eq('id', req.params.id);
+  res.json({ success: true });
+});
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
