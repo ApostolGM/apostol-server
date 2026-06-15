@@ -111,7 +111,7 @@ async function enrichCharacter(ch) {
   const enrichSingle = async (char) => {
     const [{ data: prof }, { data: cp }, { data: cs }, { data: inv }] = await Promise.all([
       supabase.from('professions').select('*').eq('id', char.profession_id).single(),
-      supabase.from('character_perks').select('perk_id, linked_perk_id').eq('character_id', char.id),
+      supabase.from('character_perks').select('perk_id').eq('character_id', char.id),
       supabase.from('character_skills').select('skill_id, modifier').eq('character_id', char.id),
       supabase.from('inventory_slots')
         .select('*, item:items(*, ammo_type:ammo_types(*)), children:inventory_slots(*, item:items(*, ammo_type:ammo_types(*)))')
@@ -124,20 +124,6 @@ async function enrichCharacter(ch) {
       sIds.length ? supabase.from('skills').select('*').in('id',sIds) : Promise.resolve({ data: [] }),
     ]);
     const sm = {}; for (const p of (perks||[])) for (const m of (p.effect_modifiers||[])) if (m.skill) sm[m.skill] = (sm[m.skill]||0)+(m.modifier||0);
-    
-    // Адаптация: +5% к штрафу выбранного негативного перка
-    for (const cpItem of (cp||[])) {
-      if (cpItem.linked_perk_id) {
-        const linkedPerk = (perks||[]).find(p => p.id === cpItem.linked_perk_id);
-        if (linkedPerk) {
-          for (const m of (linkedPerk.effect_modifiers||[])) {
-            if (m.skill && m.modifier < 0) {
-              sm[m.skill] = (sm[m.skill]||0) + 5;
-            }
-          }
-        }
-      }
-    }
     
     // Бонусы к параметрам
     let carryBonus = 0;
@@ -314,47 +300,22 @@ app.post('/api/characters', authMiddleware, validate(schemas.createCharacter), a
   if (!prof) return res.status(400).json({ error: 'Профессия не найдена' });
   let bp = 10; if (perk_ids?.length) { const { data: perks } = await supabase.from('perks').select('*').in('id', perk_ids); for (const p of perks) bp += p.cost; }
   if (bp < 0) return res.status(400).json({ error: `Не хватает очков: ${bp}` });
-  
-  // Создаём персонажа
   const { data: ch, error } = await supabase.from('characters').insert({ user_id: req.user.id, campaign_id, name, profession_id, balance_points: bp, food: 100, water: 100, stress: 0 }).select().single();
   if (error) return res.status(500).json({ error: error.message });
-  
-  // Готовим промисы вставки
   const insertPromises = [];
-  
-  // Стартовые навыки профессии
-  for (const ss of (prof.starter_skills||[])) { 
-    const { data: sk } = await supabase.from('skills').select('id').eq('name', ss.skill).single(); 
-    if (sk) insertPromises.push(supabase.from('character_skills').insert({ character_id: ch.id, skill_id: sk.id, modifier: ss.modifier })); 
-  }
-  
-  // Перки
+  for (const ss of (prof.starter_skills||[])) { const { data: sk } = await supabase.from('skills').select('id').eq('name', ss.skill).single(); if (sk) insertPromises.push(supabase.from('character_skills').insert({ character_id: ch.id, skill_id: sk.id, modifier: ss.modifier })); }
   if (perk_ids?.length) {
-    const pd = perk_data || [];
     for (const pid of perk_ids) {
-      const pdd = pd.find(p => String(p.perk_id) === String(pid));
       insertPromises.push(
-  supabase.from('character_perks').insert({
-    character_id: ch.id,
-    perk_id: pid
-  }).select()
-);
-    console.log('Total insertPromises for perks:', insertPromises.filter(p => p).length); // <-- ПЕРВЫЙ ЛОГ
+        supabase.from('character_perks').insert({
+          character_id: ch.id,
+          perk_id: pid
+        }).select()
+      );
+    }
   }
-  
-  // Привязка персонажа к игроку
   insertPromises.push(supabase.from('campaign_members').update({ character_id: ch.id }).eq('campaign_id', campaign_id).eq('user_id', req.user.id));
-  
-  // Выполняем все вставки
-  try {
-    await Promise.all(insertPromises);
-    const check = await supabase.from('character_perks').select('*').eq('character_id', ch.id);
-    console.log('Perks saved:', check.data?.length, 'Error:', check.error?.message); // <-- ВТОРОЙ ЛОГ
-  } catch (err) {
-    console.error('INSERT ERROR:', err.message);
-  }
-  
-  // Возвращаем обогащённого персонажа
+  await Promise.all(insertPromises);
   const enriched = await enrichCharacter(ch);
   notifyCampaign(campaign_id, 'character_updated', { character_id: ch.id, updates: enriched });
   res.json(enriched);
