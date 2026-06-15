@@ -297,10 +297,14 @@ app.get('/api/campaigns/:id/characters', authMiddleware, async (req, res) => {
   res.json(enrichedWithOwner);
 });
 
-app.get('/api/professions', authMiddleware, async (req, res) => { const { data } = await supabase.from('professions').select('*').eq('is_global', true); res.json(data); });
-app.get('/api/perks', authMiddleware, async (req, res) => { const { data } = await supabase.from('perks').select('*').eq('is_global', true); res.json(data); });
-app.get('/api/skills', authMiddleware, async (req, res) => { const { data } = await supabase.from('skills').select('*, characteristic:characteristics(*)').eq('is_global', true); res.json(data); });
+// Профессии
+app.get('/api/professions', authMiddleware, async (req, res) => { const { data } = await supabase.from('professions').select('*').order('name'); res.json(data); });
 
+// Перки
+app.get('/api/perks', authMiddleware, async (req, res) => { const { data } = await supabase.from('perks').select('*').order('name'); res.json(data); });
+
+// Навыки
+app.get('/api/skills', authMiddleware, async (req, res) => { const { data } = await supabase.from('skills').select('*, characteristic:characteristics(*)').order('name'); res.json(data); });
 app.post('/api/characters', authMiddleware, validate(schemas.createCharacter), async (req, res) => {
   const { campaign_id, name, profession_id, perk_ids, perk_data } = req.body;
   const { data: member } = await supabase.from('campaign_members').select('role').eq('campaign_id', campaign_id).eq('user_id', req.user.id).single();
