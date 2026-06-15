@@ -304,7 +304,12 @@ app.get('/api/professions', authMiddleware, async (req, res) => { const { data }
 
 // Перки
 app.get('/api/perks', authMiddleware, async (req, res) => { const { data } = await supabase.from('perks').select('*').order('name'); res.json(data); });
+const { data: testInsert, error: testError } = await supabase.from('character_perks').insert({
+  character_id: ch.id,
+  perk_id: perk_ids[0]
+}).select();
 
+console.log('TEST INSERT:', testInsert, testError?.message);
 // Навыки
 app.get('/api/skills', authMiddleware, async (req, res) => { const { data } = await supabase.from('skills').select('*, characteristic:characteristics(*)').order('name'); res.json(data); });
 app.post('/api/characters', authMiddleware, validate(schemas.createCharacter), async (req, res) => {
