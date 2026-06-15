@@ -29,6 +29,8 @@ app.use(express.json({ limit: '50mb' }));
 app.use(globalLimiter);
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+console.log('Supabase URL:', process.env.SUPABASE_URL ? 'SET' : 'MISSING');
+console.log('Service Role Key:', process.env.SUPABASE_SERVICE_ROLE_KEY ? 'SET (length ' + process.env.SUPABASE_SERVICE_ROLE_KEY.length + ')' : 'MISSING');
 const JWT_SECRET = process.env.JWT_SECRET;
 
 cloudinary.config({ cloud_name: process.env.CLOUDINARY_CLOUD_NAME, api_key: process.env.CLOUDINARY_API_KEY, api_secret: process.env.CLOUDINARY_API_SECRET });
