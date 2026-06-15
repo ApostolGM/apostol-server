@@ -111,6 +111,19 @@ async function enrichCharacter(ch) {
       sIds.length ? supabase.from('skills').select('*').in('id',sIds) : Promise.resolve({ data: [] }),
     ]);
     const sm = {}; for (const p of (perks||[])) for (const m of (p.effect_modifiers||[])) if (m.skill) sm[m.skill] = (sm[m.skill]||0)+(m.modifier||0);
+        // Адаптация: +5% к штрафу выбранного негативного перка
+    for (const cpItem of (cp||[])) {
+      if (cpItem.linked_perk_id) {
+        const linkedPerk = (perks||[]).find(p => p.id === cpItem.linked_perk_id);
+        if (linkedPerk) {
+          for (const m of (linkedPerk.effect_modifiers||[])) {
+            if (m.skill && m.modifier < 0) {
+              sm[m.skill] = (sm[m.skill]||0) + 5;
+            }
+          }
+        }
+      }
+    }
     
     // Бонусы к параметрам
     let carryBonus = 0;
