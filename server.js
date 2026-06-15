@@ -320,7 +320,7 @@ app.post('/api/characters', authMiddleware, validate(schemas.createCharacter), a
   if (perk_ids?.length) {
     const pd = perk_data || [];
     for (const pid of perk_ids) {
-      const pdd = pd.find(p => p.perk_id === pid);
+      const pdd = pd.find(p => String(p.perk_id) === String(pid));
       insertPromises.push(
         supabase.from('character_perks').insert({
           character_id: ch.id,
