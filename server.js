@@ -314,10 +314,21 @@ app.post('/api/characters', authMiddleware, validate(schemas.createCharacter), a
   if (!prof) return res.status(400).json({ error: 'Профессия не найдена' });
   let bp = 10; if (perk_ids?.length) { const { data: perks } = await supabase.from('perks').select('*').in('id', perk_ids); for (const p of perks) bp += p.cost; }
   if (bp < 0) return res.status(400).json({ error: `Не хватает очков: ${bp}` });
+  
+  // Создаём персонажа
   const { data: ch, error } = await supabase.from('characters').insert({ user_id: req.user.id, campaign_id, name, profession_id, balance_points: bp, food: 100, water: 100, stress: 0 }).select().single();
   if (error) return res.status(500).json({ error: error.message });
+  
+  // Готовим промисы вставки
   const insertPromises = [];
-  for (const ss of (prof.starter_skills||[])) { const { data: sk } = await supabase.from('skills').select('id').eq('name', ss.skill).single(); if (sk) insertPromises.push(supabase.from('character_skills').insert({ character_id: ch.id, skill_id: sk.id, modifier: ss.modifier })); }
+  
+  // Стартовые навыки профессии
+  for (const ss of (prof.starter_skills||[])) { 
+    const { data: sk } = await supabase.from('skills').select('id').eq('name', ss.skill).single(); 
+    if (sk) insertPromises.push(supabase.from('character_skills').insert({ character_id: ch.id, skill_id: sk.id, modifier: ss.modifier })); 
+  }
+  
+  // Перки
   if (perk_ids?.length) {
     const pd = perk_data || [];
     for (const pid of perk_ids) {
@@ -330,13 +341,22 @@ app.post('/api/characters', authMiddleware, validate(schemas.createCharacter), a
         }).select()
       );
     }
+    console.log('Total insertPromises for perks:', insertPromises.filter(p => p).length); // <-- ПЕРВЫЙ ЛОГ
   }
+  
+  // Привязка персонажа к игроку
   insertPromises.push(supabase.from('campaign_members').update({ character_id: ch.id }).eq('campaign_id', campaign_id).eq('user_id', req.user.id));
+  
+  // Выполняем все вставки
   try {
     await Promise.all(insertPromises);
+    const check = await supabase.from('character_perks').select('*').eq('character_id', ch.id);
+    console.log('Perks saved:', check.data?.length, 'Error:', check.error?.message); // <-- ВТОРОЙ ЛОГ
   } catch (err) {
     console.error('INSERT ERROR:', err.message);
   }
+  
+  // Возвращаем обогащённого персонажа
   const enriched = await enrichCharacter(ch);
   notifyCampaign(campaign_id, 'character_updated', { character_id: ch.id, updates: enriched });
   res.json(enriched);
