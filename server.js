@@ -24,7 +24,7 @@ const chatLimiter = rateLimit({ windowMs: 1000, max: 5, message: { error: 'Сл�
 const diceLimiter = rateLimit({ windowMs: 1000, max: 10, message: { error: 'Слишком много бросков' } });
 
 app.use(cors({ origin: '*', allowedHeaders: ['Content-Type', 'Authorization'], methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] }));
-app.options('*', cors());
+app.options('*', (req, res) => {   res.header('Access-Control-Allow-Origin', '*');   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');   res.sendStatus(200); });
 app.use(express.json({ limit: '50mb' }));
 app.use(globalLimiter);
 
