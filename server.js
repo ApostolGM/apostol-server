@@ -307,6 +307,8 @@ app.get('/api/perks', authMiddleware, async (req, res) => { const { data } = awa
 app.get('/api/skills', authMiddleware, async (req, res) => { const { data } = await supabase.from('skills').select('*, characteristic:characteristics(*)').order('name'); res.json(data); });
 app.post('/api/characters', authMiddleware, validate(schemas.createCharacter), async (req, res) => {
   const { campaign_id, name, profession_id, perk_ids, perk_data } = req.body;
+  console.log('perk_ids:', perk_ids);
+  console.log('perk_data:', perk_data);
   const { data: member } = await supabase.from('campaign_members').select('role').eq('campaign_id', campaign_id).eq('user_id', req.user.id).single();
   if (!member || ['master','co-master'].includes(member.role)) return res.status(403).json({ error: 'Мастер не может создавать персонажа' });
   const { data: prof } = await supabase.from('professions').select('*').eq('id', profession_id).single();
