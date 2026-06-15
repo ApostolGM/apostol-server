@@ -24,13 +24,16 @@ const chatLimiter = rateLimit({ windowMs: 1000, max: 5, message: { error: 'Сл�
 const diceLimiter = rateLimit({ windowMs: 1000, max: 10, message: { error: 'Слишком много бросков' } });
 
 app.use(cors({ origin: '*', allowedHeaders: ['Content-Type', 'Authorization'], methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] }));
-app.options('*', (req, res) => {   res.header('Access-Control-Allow-Origin', '*');   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');   res.sendStatus(200); });
+app.options('*', (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.sendStatus(200);
+});
 app.use(express.json({ limit: '50mb' }));
 app.use(globalLimiter);
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
-console.log('Supabase URL:', process.env.SUPABASE_URL ? 'SET' : 'MISSING');
-console.log('Service Role Key:', process.env.SUPABASE_SERVICE_ROLE_KEY ? 'SET (length ' + process.env.SUPABASE_SERVICE_ROLE_KEY.length + ')' : 'MISSING');
 const JWT_SECRET = process.env.JWT_SECRET;
 
 cloudinary.config({ cloud_name: process.env.CLOUDINARY_CLOUD_NAME, api_key: process.env.CLOUDINARY_API_KEY, api_secret: process.env.CLOUDINARY_API_SECRET });
@@ -299,23 +302,12 @@ app.get('/api/campaigns/:id/characters', authMiddleware, async (req, res) => {
   res.json(enrichedWithOwner);
 });
 
-// Профессии
 app.get('/api/professions', authMiddleware, async (req, res) => { const { data } = await supabase.from('professions').select('*').order('name'); res.json(data); });
-
-// Перки
 app.get('/api/perks', authMiddleware, async (req, res) => { const { data } = await supabase.from('perks').select('*').order('name'); res.json(data); });
-const { data: testInsert, error: testError } = await supabase.from('character_perks').insert({
-  character_id: ch.id,
-  perk_id: perk_ids[0]
-}).select();
-
-console.log('TEST INSERT:', testInsert, testError?.message);
-// Навыки
 app.get('/api/skills', authMiddleware, async (req, res) => { const { data } = await supabase.from('skills').select('*, characteristic:characteristics(*)').order('name'); res.json(data); });
+
 app.post('/api/characters', authMiddleware, validate(schemas.createCharacter), async (req, res) => {
   const { campaign_id, name, profession_id, perk_ids, perk_data } = req.body;
-  console.log('perk_ids:', perk_ids);
-  console.log('perk_data:', perk_data);
   const { data: member } = await supabase.from('campaign_members').select('role').eq('campaign_id', campaign_id).eq('user_id', req.user.id).single();
   if (!member || ['master','co-master'].includes(member.role)) return res.status(403).json({ error: 'Мастер не может создавать персонажа' });
   const { data: prof } = await supabase.from('professions').select('*').eq('id', profession_id).single();
@@ -329,19 +321,22 @@ app.post('/api/characters', authMiddleware, validate(schemas.createCharacter), a
   if (perk_ids?.length) {
     const pd = perk_data || [];
     for (const pid of perk_ids) {
-      console.log('insertPromises count:', insertPromises.length);
       const pdd = pd.find(p => String(p.perk_id) === String(pid));
       insertPromises.push(
         supabase.from('character_perks').insert({
           character_id: ch.id,
           perk_id: pid,
           linked_perk_id: pdd?.linked_perk_id || null
-        })
+        }).select()
       );
     }
   }
   insertPromises.push(supabase.from('campaign_members').update({ character_id: ch.id }).eq('campaign_id', campaign_id).eq('user_id', req.user.id));
-  await Promise.all(insertPromises);
+  try {
+    await Promise.all(insertPromises);
+  } catch (err) {
+    console.error('INSERT ERROR:', err.message);
+  }
   const enriched = await enrichCharacter(ch);
   notifyCampaign(campaign_id, 'character_updated', { character_id: ch.id, updates: enriched });
   res.json(enriched);
