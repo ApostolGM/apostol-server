@@ -149,6 +149,28 @@ io.on('connection', (socket) => {
   socket.on('sound_play', (data) => socket.to(`campaign:${data.campaignId}`).emit('sound_play', data));
   socket.on('sound_stop', (data) => socket.to(`campaign:${data.campaignId}`).emit('sound_stop', data));
   socket.on('set_role', (role) => { socket.data.role = role; });
+   socket.on('death_loan_request', (data) => {
+    const room = io.sockets.adapter.rooms.get(`campaign:${data.campaignId}`);
+    if (room) {
+      for (const sid of room) {
+        const s = io.sockets.sockets.get(sid);
+        if (s?.data?.role && ['master', 'co-master'].includes(s.data.role)) {
+          s.emit('death_loan_requested', data);
+        }
+      }
+    }
+  });
+
+  socket.on('death_loan_approve', async (data) => {
+    await supabase.from('characters').update({ death_loan_count: (data.count || 0) + 1 }).eq('id', data.characterId);
+    io.to(`campaign:${data.campaignId}`).emit('death_loan_approved', data);
+  });
+
+  socket.on('death_loan_force_fail', async (data) => {
+    await supabase.from('characters').update({ death_loan_count: Math.max(0, (data.count || 1) - 1) }).eq('id', data.characterId);
+    io.to(`campaign:${data.campaignId}`).emit('death_loan_forced', data);
+  });
+
   socket.on('disconnect', () => { for (const [uid, d] of activeUsers.entries()) if (d.socketId === socket.id) { activeUsers.delete(uid); break; } });
 });
 
