@@ -97,7 +97,7 @@ async function enrichCharacter(ch) {
   const enrichSingle = async (char) => {
     const [{ data: prof }, { data: cp }, { data: cs }, { data: inv }] = await Promise.all([
       supabase.from('professions').select('*').eq('id', char.profession_id).single(),
-      supabase.from('character_perks').select('perk_id, linked_perk_id').eq('character_id', char.id)
+      supabase.from('character_perks').select('perk_id, linked_perk_id').eq('character_id', char.id),
       supabase.from('character_skills').select('skill_id, modifier').eq('character_id', char.id),
       supabase.from('inventory_slots')
         .select('*, item:items(*, ammo_type:ammo_types(*)), children:inventory_slots(*, item:items(*, ammo_type:ammo_types(*)))')
