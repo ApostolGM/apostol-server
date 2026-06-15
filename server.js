@@ -97,7 +97,7 @@ async function enrichCharacter(ch) {
   const enrichSingle = async (char) => {
     const [{ data: prof }, { data: cp }, { data: cs }, { data: inv }] = await Promise.all([
       supabase.from('professions').select('*').eq('id', char.profession_id).single(),
-      supabase.from('character_perks').select('perk_id').eq('character_id', char.id),
+      supabase.from('character_perks').select('perk_id, linked_perk_id').eq('character_id', char.id)
       supabase.from('character_skills').select('skill_id, modifier').eq('character_id', char.id),
       supabase.from('inventory_slots')
         .select('*, item:items(*, ammo_type:ammo_types(*)), children:inventory_slots(*, item:items(*, ammo_type:ammo_types(*)))')
@@ -259,8 +259,19 @@ app.post('/api/characters', authMiddleware, validate(schemas.createCharacter), a
   if (error) return res.status(500).json({ error: error.message });
   const insertPromises = [];
   for (const ss of (prof.starter_skills||[])) { const { data: sk } = await supabase.from('skills').select('id').eq('name', ss.skill).single(); if (sk) insertPromises.push(supabase.from('character_skills').insert({ character_id: ch.id, skill_id: sk.id, modifier: ss.modifier })); }
-  if (perk_ids?.length) for (const pid of perk_ids) insertPromises.push(supabase.from('character_perks').insert({ character_id: ch.id, perk_id: pid }));
-  insertPromises.push(supabase.from('campaign_members').update({ character_id: ch.id }).eq('campaign_id', campaign_id).eq('user_id', req.user.id));
+ if (perk_ids?.length) {
+  const perkData = req.body.perk_data || [];
+  for (const pid of perk_ids) {
+    const pd = perkData.find(p => p.perk_id === pid);
+    insertPromises.push(
+      supabase.from('character_perks').insert({
+        character_id: ch.id,
+        perk_id: pid,
+        linked_perk_id: pd?.linked_perk_id || null
+      })
+    );
+  }
+}
   await Promise.all(insertPromises);
   const enriched = await enrichCharacter(ch);
   notifyCampaign(campaign_id, 'character_updated', { character_id: ch.id, updates: enriched });
