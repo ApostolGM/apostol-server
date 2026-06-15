@@ -334,13 +334,11 @@ app.post('/api/characters', authMiddleware, validate(schemas.createCharacter), a
     for (const pid of perk_ids) {
       const pdd = pd.find(p => String(p.perk_id) === String(pid));
       insertPromises.push(
-        supabase.from('character_perks').insert({
-          character_id: ch.id,
-          perk_id: pid,
-          linked_perk_id: pdd?.linked_perk_id || null
-        }).select()
-      );
-    }
+  supabase.from('character_perks').insert({
+    character_id: ch.id,
+    perk_id: pid
+  }).select()
+);
     console.log('Total insertPromises for perks:', insertPromises.filter(p => p).length); // <-- ПЕРВЫЙ ЛОГ
   }
   
