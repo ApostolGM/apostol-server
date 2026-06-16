@@ -313,7 +313,7 @@ app.get('/api/perks', authMiddleware, async (req, res) => { const { data } = awa
 app.get('/api/skills', authMiddleware, async (req, res) => { const { data } = await supabase.from('skills').select('*, characteristic:characteristics(*)').order('name'); res.json(data); });
 
 app.post('/api/characters', authMiddleware, validate(schemas.createCharacter), async (req, res) => {
-  const { campaign_id, name, profession_id, perk_ids, perk_data } = req.body;
+  const { campaign_id, name, profession_id, perk_ids } = req.body;
   const { data: member } = await supabase.from('campaign_members').select('role').eq('campaign_id', campaign_id).eq('user_id', req.user.id).single();
   if (!member || ['master','co-master'].includes(member.role)) return res.status(403).json({ error: 'Мастер не может создавать персонажа' });
   const { data: prof } = await supabase.from('professions').select('*').eq('id', profession_id).single();
@@ -326,11 +326,15 @@ app.post('/api/characters', authMiddleware, validate(schemas.createCharacter), a
   for (const ss of (prof.starter_skills||[])) { const { data: sk } = await supabase.from('skills').select('id').eq('name', ss.skill).single(); if (sk) insertPromises.push(supabase.from('character_skills').insert({ character_id: ch.id, skill_id: sk.id, modifier: ss.modifier })); }
   if (perk_ids?.length) {
     for (const pid of perk_ids) {
-      insertPromises.push(
-        supabase.from('character_perks').insert({ character_id: ch.id, perk_id: pid }).select()
-      );
+      insertPromises.push(supabase.from('character_perks').insert({ character_id: ch.id, perk_id: pid }));
     }
   }
+  insertPromises.push(supabase.from('campaign_members').update({ character_id: ch.id }).eq('campaign_id', campaign_id).eq('user_id', req.user.id));
+  await Promise.all(insertPromises);
+  const enriched = await enrichCharacter(ch);
+  notifyCampaign(campaign_id, 'character_updated', { character_id: ch.id, updates: enriched });
+  res.json(enriched);
+});
   insertPromises.push(supabase.from('campaign_members').update({ character_id: ch.id }).eq('campaign_id', campaign_id).eq('user_id', req.user.id));
   await Promise.all(insertPromises);
   const enriched = await enrichCharacter(ch);
