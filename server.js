@@ -68,7 +68,11 @@ const schemas = {
     campaign_id: Joi.string().uuid().required(), 
     name: Joi.string().min(1).max(100).required(), 
     profession_id: Joi.string().uuid().required(), 
-    perk_ids: Joi.array().items(Joi.string().uuid())
+    perk_ids: Joi.array().items(Joi.string().uuid()),
+    perk_data: Joi.array().items(Joi.object({
+      perk_id: Joi.string().uuid(),
+      linked_perk_id: Joi.string().uuid().allow(null)
+    })).optional()
   }),
   sendMessage: Joi.object({ text: Joi.string().min(1).max(2000).required(), is_roll: Joi.boolean().default(false) }),
   diceAuto: Joi.object({ character_id: Joi.string().uuid().required(), skill_name: Joi.string().required() }),
@@ -79,26 +83,26 @@ const schemas = {
   createItem: Joi.object({
     name: Joi.string().required(),
     slot: Joi.string().required(),
-    subcategory: Joi.string().allow('', null),
-    icon: Joi.string().allow('', null),
-    weight: Joi.number().min(0),
-    condition_percent: Joi.number().min(0).max(100),
-    description: Joi.string().allow(''),
-    trade_price: Joi.number().min(0),
-    weapon_type: Joi.string().valid('melee','ranged','thrown').allow(null),
-    max_ammo: Joi.number().min(0),
-    is_heavy: Joi.boolean(),
-    ammo_type_id: Joi.string().uuid().allow(null),
-    accepted_ammo_types: Joi.array().items(Joi.string().uuid()),
-    mod_target: Joi.string().valid('weapon','armor','exo','any').allow(null),
-    weapon_mod_subtype: Joi.string().valid('melee','ranged','thrown','any').allow(null),
-    is_global: Joi.boolean().default(true),
-    is_container: Joi.boolean().default(false),
-    container_slots: Joi.number().integer().min(0).default(0),
+    subcategory: Joi.string().allow('', null).optional(),
+    icon: Joi.string().allow('', null).optional(),
+    weight: Joi.number().min(0).optional(),
+    condition_percent: Joi.number().min(0).max(100).optional(),
+    description: Joi.string().allow('').optional(),
+    trade_price: Joi.number().min(0).optional(),
+    weapon_type: Joi.string().valid('melee','ranged','thrown').allow(null, '').optional(),
+    max_ammo: Joi.number().min(0).optional(),
+    is_heavy: Joi.boolean().optional(),
+    ammo_type_id: Joi.string().uuid().allow(null, '').optional(),
+    accepted_ammo_types: Joi.array().items(Joi.string().uuid()).optional(),
+    mod_target: Joi.string().valid('weapon','armor','exo','any').allow(null, '').optional(),
+    weapon_mod_subtype: Joi.string().valid('melee','ranged','thrown','any').allow(null, '').optional(),
+    is_global: Joi.boolean().default(true).optional(),
+    is_container: Joi.boolean().default(false).optional(),
+    container_slots: Joi.number().integer().min(0).default(0).optional(),
     container_items: Joi.array().items(Joi.object({
       item_id: Joi.string().uuid().required(),
       quantity: Joi.number().integer().min(1).default(1)
-    })).default([]),
+    })).default([]).optional(),
   }),
 };
 
@@ -107,7 +111,7 @@ async function enrichCharacter(ch) {
   const enrichSingle = async (char) => {
     const [{ data: prof }, { data: cp }, { data: cs }, { data: inv }] = await Promise.all([
       supabase.from('professions').select('*').eq('id', char.profession_id).single(),
-      supabase.from('character_perks').select('perk_id').eq('character_id', char.id),
+      supabase.from('character_perks').select('perk_id, linked_perk_id').eq('character_id', char.id),
       supabase.from('character_skills').select('skill_id, modifier').eq('character_id', char.id),
       supabase.from('inventory_slots')
         .select('*, item:items(*, ammo_type:ammo_types(*)), children:inventory_slots(*, item:items(*, ammo_type:ammo_types(*)))')
@@ -121,7 +125,21 @@ async function enrichCharacter(ch) {
     ]);
     const sm = {}; for (const p of (perks||[])) for (const m of (p.effect_modifiers||[])) if (m.skill) sm[m.skill] = (sm[m.skill]||0)+(m.modifier||0);
     
-    // Бонусы к параметрам
+    // Адаптация: +5% к штрафу И +5% к навыкам связанного перка
+    for (const cpItem of (cp||[])) {
+      if (cpItem.linked_perk_id) {
+        const linkedPerk = (perks||[]).find(p => p.id === cpItem.linked_perk_id);
+        if (linkedPerk) {
+          for (const m of (linkedPerk.effect_modifiers||[])) {
+            if (m.skill) {
+              if (m.modifier < 0) sm[m.skill] = (sm[m.skill]||0) + 5;
+              sm[m.skill] = (sm[m.skill]||0) + 5;
+            }
+          }
+        }
+      }
+    }
+    
     let carryBonus = 0;
     for (const p of (perks||[])) {
       for (const m of (p.effect_modifiers||[])) {
@@ -138,7 +156,7 @@ async function enrichCharacter(ch) {
       }
       return { ...slot, containerWeight: slot.item?.is_container ? totalWeight : null, children: children };
     });
-    return {...char, profession: prof||null, perks: perks||[], skills: enrichedSkills, inventory: enrichedInventory, carry_weight_max: (char.carry_weight_max || 50) + carryBonus};
+    return {...char, campaign_id: char.campaign_id, profession: prof||null, perks: perks||[], skills: enrichedSkills, inventory: enrichedInventory, carry_weight_max: (char.carry_weight_max || 50) + carryBonus};
   };
   if (Array.isArray(ch)) return Promise.all(ch.map(enrichSingle));
   return enrichSingle(ch);
@@ -169,7 +187,6 @@ io.on('connection', (socket) => {
   socket.on('sound_stop', (data) => socket.to(`campaign:${data.campaignId}`).emit('sound_stop', data));
   socket.on('set_role', (role) => { socket.data.role = role; });
   
-  // Рассрочка гибели
   socket.on('death_loan_request', (data) => {
     const room = io.sockets.adapter.rooms.get(`campaign:${data.campaignId}`);
     if (room) {
@@ -190,7 +207,6 @@ io.on('connection', (socket) => {
     io.to(`campaign:${data.campaignId}`).emit('death_loan_forced', data);
   });
 
-  // База
   socket.on('base_updated', (data) => {
     io.to(`campaign:${data.campaignId}`).emit('base_updated', data);
   });
@@ -258,9 +274,8 @@ app.get('/api/campaigns/:id', authMiddleware, async (req, res) => {
 });
 
 app.put('/api/campaigns/:id/time', authMiddleware, async (req, res) => {
-  const { game_time_date, game_time_hours, game_time_minutes } = req.body;
-  const updates = {}; if (game_time_date !== undefined) updates.game_time_date = game_time_date; if (game_time_hours !== undefined) updates.game_time_hours = game_time_hours; if (game_time_minutes !== undefined) updates.game_time_minutes = game_time_minutes;
-  const { data, error } = await supabase.from('campaigns').update(updates).eq('id', req.params.id).select().single();
+  const { game_time } = req.body;
+  const { data, error } = await supabase.from('campaigns').update({ game_time }).eq('id', req.params.id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   notifyCampaign(req.params.id, 'campaign_updated', data);
   res.json(data);
@@ -294,7 +309,7 @@ app.get('/api/perks', authMiddleware, async (req, res) => { const { data } = awa
 app.get('/api/skills', authMiddleware, async (req, res) => { const { data } = await supabase.from('skills').select('*, characteristic:characteristics(*)').order('name'); res.json(data); });
 
 app.post('/api/characters', authMiddleware, validate(schemas.createCharacter), async (req, res) => {
-  const { campaign_id, name, profession_id, perk_ids } = req.body;
+  const { campaign_id, name, profession_id, perk_ids, perk_data } = req.body;
   const { data: member } = await supabase.from('campaign_members').select('role').eq('campaign_id', campaign_id).eq('user_id', req.user.id).single();
   if (!member || ['master','co-master'].includes(member.role)) return res.status(403).json({ error: 'Мастер не может создавать персонажа' });
   const { data: prof } = await supabase.from('professions').select('*').eq('id', profession_id).single();
@@ -306,8 +321,10 @@ app.post('/api/characters', authMiddleware, validate(schemas.createCharacter), a
   const insertPromises = [];
   for (const ss of (prof.starter_skills||[])) { const { data: sk } = await supabase.from('skills').select('id').eq('name', ss.skill).single(); if (sk) insertPromises.push(supabase.from('character_skills').insert({ character_id: ch.id, skill_id: sk.id, modifier: ss.modifier })); }
   if (perk_ids?.length) {
+    const pd = perk_data || [];
     for (const pid of perk_ids) {
-      insertPromises.push(supabase.from('character_perks').insert({ character_id: ch.id, perk_id: pid }));
+      const pdd = pd.find(p => String(p.perk_id) === String(pid));
+      insertPromises.push(supabase.from('character_perks').insert({ character_id: ch.id, perk_id: pid, linked_perk_id: pdd?.linked_perk_id || null }));
     }
   }
   insertPromises.push(supabase.from('campaign_members').update({ character_id: ch.id }).eq('campaign_id', campaign_id).eq('user_id', req.user.id));
@@ -320,7 +337,7 @@ app.post('/api/characters', authMiddleware, validate(schemas.createCharacter), a
 app.get('/api/characters/:id', authMiddleware, async (req, res) => { const { data: ch } = await supabase.from('characters').select('*').eq('id', req.params.id).single(); if (!ch) return res.status(404).json({ error: 'Не найден' }); const enriched = await enrichCharacter(ch); res.json(enriched); });
 
 app.put('/api/characters/:id/params', authMiddleware, async (req, res) => {
-  const allowed = ['food','water','stress','game_time_date','game_time_hours','game_time_minutes','carry_weight_max','currency'];
+  const allowed = ['food','water','stress','carry_weight_max','currency'];
   const updates = {};
   for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
   const { data, error } = await supabase.from('characters').update(updates).eq('id', req.params.id).select('*').single();
@@ -338,7 +355,6 @@ app.delete('/api/characters/:id', authMiddleware, async (req, res) => {
   notifyCampaign(ch.campaign_id, 'character_deleted', { character_id: req.params.id });
   res.json({ success: true });
 });
-
 // ===== CHARACTER SKILLS =====
 app.post('/api/characters/:id/skills', authMiddleware, async (req, res) => { const { skill_id, modifier } = req.body; const { data, error } = await supabase.from('character_skills').insert({ character_id: req.params.id, skill_id, modifier: modifier||0 }).select().single(); if (error) return res.status(500).json({ error: error.message }); const { data: ch } = await supabase.from('characters').select('campaign_id').eq('id', req.params.id).single(); if (ch?.campaign_id) notifyCampaign(ch.campaign_id, 'character_skills_updated', { character_id: req.params.id }); res.json(data); });
 app.put('/api/characters/:id/skills/:skillId', authMiddleware, async (req, res) => { const { modifier } = req.body; const { data, error } = await supabase.from('character_skills').update({ modifier }).eq('character_id', req.params.id).eq('skill_id', req.params.skillId).select().single(); if (error) return res.status(500).json({ error: error.message }); const { data: ch } = await supabase.from('characters').select('campaign_id').eq('id', req.params.id).single(); if (ch?.campaign_id) notifyCampaign(ch.campaign_id, 'character_skills_updated', { character_id: req.params.id }); res.json(data); });
@@ -657,8 +673,7 @@ app.get('/api/admin/sounds', authMiddleware, adminMiddleware, async (req, res) =
 app.delete('/api/admin/sounds/:id', authMiddleware, adminMiddleware, async (req, res) => { await supabase.from('sounds').delete().eq('id', req.params.id); res.json({ success: true }); });
 app.get('/api/admin/campaigns', authMiddleware, adminMiddleware, async (req, res) => { const { data } = await supabase.from('campaigns').select('*, master:users(username)').order('created_at', { ascending: false }); res.json(data || []); });
 app.delete('/api/admin/campaigns/:id', authMiddleware, adminMiddleware, async (req, res) => { await supabase.from('campaigns').delete().eq('id', req.params.id); res.json({ success: true }); });
-
-app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
+pp.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.PORT || 3000;
 httpServer.listen(PORT, () => console.log(`APOSTOL 2.3 на порту ${PORT}`));
