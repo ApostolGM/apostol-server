@@ -84,7 +84,7 @@ app.use('/api/subcategories', subcategoryRoutes);
 app.use('/api/backgrounds', backgroundRoutes);
 app.use('/api/professions', professionRoutes);
 
-// Публичные эндпоинты для перков и навыков
+// Публичные эндпоинты
 app.get('/api/perks', authMiddleware, async (req, res) => {
   const { data } = await supabase.from('perks').select('*').order('name');
   res.json(data || []);
@@ -95,7 +95,6 @@ app.get('/api/skills', authMiddleware, async (req, res) => {
   res.json(data || []);
 });
 
-// Health check
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
 // Socket.IO
