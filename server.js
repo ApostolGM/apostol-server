@@ -4,7 +4,8 @@ import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import { globalLimiter } from './middleware.js';
+import { supabase } from './config/supabase.js';
+import { globalLimiter, authMiddleware } from './middleware.js';
 import { setupSocket } from './socket.js';
 
 // Роуты
@@ -63,7 +64,7 @@ app.use('/api/campaigns', campaignRoutes);
 app.use('/api/characters', characterRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/master', masterRoutes);
-app.use('/api', lootRoutes);              // /api/campaigns/:id/loot + /api/loot/:id/...
+app.use('/api/loot', lootRoutes);
 app.use('/api/npcs', npcRoutes);
 app.use('/api/items', itemRoutes);
 app.use('/api/dice', diceRoutes);
@@ -81,7 +82,18 @@ app.use('/api/characteristics', characteristicRoutes);
 app.use('/api/playlists', playlistRoutes);
 app.use('/api/subcategories', subcategoryRoutes);
 app.use('/api/backgrounds', backgroundRoutes);
-app.use('/api', professionRoutes);        // /api/professions, /api/perks, /api/skills
+app.use('/api/professions', professionRoutes);
+
+// Публичные эндпоинты для перков и навыков
+app.get('/api/perks', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('perks').select('*').order('name');
+  res.json(data || []);
+});
+
+app.get('/api/skills', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('skills').select('*, characteristic:characteristics(*)').order('name');
+  res.json(data || []);
+});
 
 // Health check
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
