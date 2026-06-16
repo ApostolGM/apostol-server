@@ -2,7 +2,7 @@
 import { Router } from 'express';
 import { supabase } from '../config/supabase.js';
 import { authMiddleware, validate, schemas } from '../middleware.js';
-import { enrichCharacter } from '../enrichCharacter.js';
+import { enrichCharacter, getWeightPenalty } from '../enrichCharacter.js';
 import { notifyCampaign } from '../socket.js';
 
 const router = Router();
@@ -150,7 +150,6 @@ router.get('/:id/weight', authMiddleware, async (req, res) => {
 
   const maxWeight = ch.carry_weight_max || 50;
   const percent = Math.round((totalWeight / maxWeight) * 100);
-  const { getWeightPenalty } = await import('../enrichCharacter.js');
   const penalty = getWeightPenalty(percent);
 
   res.json({ totalWeight, maxWeight, percent, penalty });
@@ -201,36 +200,6 @@ router.delete('/:id/skills/:skillId', authMiddleware, async (req, res) => {
     notifyCampaign(ch.campaign_id, 'character_skills_updated', { character_id: req.params.id });
   }
   res.json({ success: true });
-});
-
-// GET /api/campaigns/:id/characters — персонажи кампании (мастер)
-router.get('/campaigns/:campaignId/characters', authMiddleware, async (req, res) => {
-  const { data: member } = await supabase.from('campaign_members')
-    .select('role').eq('campaign_id', req.params.campaignId).eq('user_id', req.user.id).single();
-
-  if (!member || !['master', 'co-master'].includes(member.role)) {
-    return res.status(403).json({ error: 'Только для Мастера' });
-  }
-
-  const { data: members } = await supabase.from('campaign_members')
-    .select('user_id, role, character_id')
-    .eq('campaign_id', req.params.campaignId)
-    .eq('role', 'player')
-    .not('character_id', 'is', null);
-
-  if (!members?.length) return res.json([]);
-
-  const charIds = members.map(m => m.character_id);
-  const { data: chars } = await supabase.from('characters').select('*').in('id', charIds);
-  if (!chars?.length) return res.json([]);
-
-  const enriched = await enrichCharacter(chars);
-  const enrichedWithOwner = enriched.map(ch => {
-    const owner = members.find(m => m.character_id === ch.id);
-    return { ...ch, owner_role: owner?.role, owner_id: owner?.user_id };
-  });
-
-  res.json(enrichedWithOwner);
 });
 
 export default router;
