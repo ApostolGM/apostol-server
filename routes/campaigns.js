@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../config/supabase.js';
 import { authMiddleware, adminMiddleware, validate, schemas } from '../middleware.js';
+import { enrichCharacter } from '../enrichCharacter.js';
 import { notifyCampaign } from '../socket.js';
 
 const router = Router();
@@ -87,6 +88,38 @@ router.delete('/:id/members/:userId', authMiddleware, async (req, res) => {
   notifyCampaign(req.params.id, 'campaign_members_updated', { campaignId: req.params.id });
   res.json({ success: true });
 });
+
+// GET /api/campaigns/:campaignId/characters — персонажи кампании (мастер)
+router.get('/:campaignId/characters', authMiddleware, async (req, res) => {
+  const { data: member } = await supabase.from('campaign_members')
+    .select('role').eq('campaign_id', req.params.campaignId).eq('user_id', req.user.id).single();
+
+  if (!member || !['master', 'co-master'].includes(member.role)) {
+    return res.status(403).json({ error: 'Только для Мастера' });
+  }
+
+  const { data: members } = await supabase.from('campaign_members')
+    .select('user_id, role, character_id')
+    .eq('campaign_id', req.params.campaignId)
+    .eq('role', 'player')
+    .not('character_id', 'is', null);
+
+  if (!members?.length) return res.json([]);
+
+  const charIds = members.map(m => m.character_id);
+  const { data: chars } = await supabase.from('characters').select('*').in('id', charIds);
+  if (!chars?.length) return res.json([]);
+
+  const enriched = await enrichCharacter(chars);
+  const enrichedWithOwner = enriched.map(ch => {
+    const owner = members.find(m => m.character_id === ch.id);
+    return { ...ch, owner_role: owner?.role, owner_id: owner?.user_id };
+  });
+
+  res.json(enrichedWithOwner);
+});
+
+// ===== BASE INVENTORY =====
 
 // GET /api/campaigns/:id/base
 router.get('/:id/base', authMiddleware, async (req, res) => {
@@ -184,6 +217,29 @@ router.put('/:id/base/access', authMiddleware, async (req, res) => {
   await supabase.from('campaigns').update({ base_access }).eq('id', req.params.id);
   notifyCampaign(req.params.id, 'base_updated', { campaignId: req.params.id });
   res.json({ success: true, base_access });
+});
+
+// ===== LOOT =====
+
+// GET /api/campaigns/:id/loot
+router.get('/:id/loot', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('loot_pools')
+    .select('*').eq('campaign_id', req.params.id).order('created_at', { ascending: false });
+  res.json(data || []);
+});
+
+// POST /api/campaigns/:id/loot
+router.post('/:id/loot', authMiddleware, async (req, res) => {
+  const { name, items } = req.body;
+  const { data: member } = await supabase.from('campaign_members')
+    .select('role').eq('campaign_id', req.params.id).eq('user_id', req.user.id).single();
+  if (!member || !['master', 'co-master'].includes(member.role)) {
+    return res.status(403).json({ error: 'Только для Мастера' });
+  }
+  const { data, error } = await supabase.from('loot_pools')
+    .insert({ campaign_id: req.params.id, name, items: items || [] }).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
 });
 
 export default router;
