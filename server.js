@@ -335,12 +335,7 @@ app.post('/api/characters', authMiddleware, validate(schemas.createCharacter), a
   notifyCampaign(campaign_id, 'character_updated', { character_id: ch.id, updates: enriched });
   res.json(enriched);
 });
-  insertPromises.push(supabase.from('campaign_members').update({ character_id: ch.id }).eq('campaign_id', campaign_id).eq('user_id', req.user.id));
-  await Promise.all(insertPromises);
-  const enriched = await enrichCharacter(ch);
-  notifyCampaign(campaign_id, 'character_updated', { character_id: ch.id, updates: enriched });
-  res.json(enriched);
-});
+  
 
 app.get('/api/characters/:id', authMiddleware, async (req, res) => { const { data: ch } = await supabase.from('characters').select('*').eq('id', req.params.id).single(); if (!ch) return res.status(404).json({ error: 'Не найден' }); const enriched = await enrichCharacter(ch); res.json(enriched); });
 
