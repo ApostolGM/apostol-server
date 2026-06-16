@@ -111,7 +111,7 @@ async function enrichCharacter(ch) {
   const enrichSingle = async (char) => {
     const [{ data: prof }, { data: cp }, { data: cs }, { data: inv }] = await Promise.all([
       supabase.from('professions').select('*').eq('id', char.profession_id).single(),
-      supabase.from('character_perks').select('perk_id').eq('character_id', char.id),
+      supabase.from('character_perks').select('perk_id, linked_perk_id').eq('character_id', char.id),
       supabase.from('character_skills').select('skill_id, modifier').eq('character_id', char.id),
       supabase.from('inventory_slots')
         .select('*, item:items(*, ammo_type:ammo_types(*)), children:inventory_slots(*, item:items(*, ammo_type:ammo_types(*)))')
@@ -124,6 +124,21 @@ async function enrichCharacter(ch) {
       sIds.length ? supabase.from('skills').select('*').in('id',sIds) : Promise.resolve({ data: [] }),
     ]);
     const sm = {}; for (const p of (perks||[])) for (const m of (p.effect_modifiers||[])) if (m.skill) sm[m.skill] = (sm[m.skill]||0)+(m.modifier||0);
+    
+    // Адаптация: +5% к штрафу И +5% к навыкам связанного перка
+    for (const cpItem of (cp||[])) {
+      if (cpItem.linked_perk_id) {
+        const linkedPerk = (perks||[]).find(p => p.id === cpItem.linked_perk_id);
+        if (linkedPerk) {
+          for (const m of (linkedPerk.effect_modifiers||[])) {
+            if (m.skill) {
+              if (m.modifier < 0) sm[m.skill] = (sm[m.skill]||0) + 5; // компенсация штрафа
+              sm[m.skill] = (sm[m.skill]||0) + 5; // +5% к навыку
+            }
+          }
+        }
+      }
+    }
     
     // Бонусы к параметрам
     let carryBonus = 0;
@@ -192,6 +207,11 @@ io.on('connection', (socket) => {
   socket.on('death_loan_force_fail', async (data) => {
     await supabase.from('characters').update({ death_loan_count: Math.max(0, (data.count || 1) - 1) }).eq('id', data.characterId);
     io.to(`campaign:${data.campaignId}`).emit('death_loan_forced', data);
+  });
+
+  // База
+  socket.on('base_updated', (data) => {
+    io.to(`campaign:${data.campaignId}`).emit('base_updated', data);
   });
 
   socket.on('disconnect', () => { for (const [uid, d] of activeUsers.entries()) if (d.socketId === socket.id) { activeUsers.delete(uid); break; } });
@@ -307,10 +327,7 @@ app.post('/api/characters', authMiddleware, validate(schemas.createCharacter), a
   if (perk_ids?.length) {
     for (const pid of perk_ids) {
       insertPromises.push(
-        supabase.from('character_perks').insert({
-          character_id: ch.id,
-          perk_id: pid
-        }).select()
+        supabase.from('character_perks').insert({ character_id: ch.id, perk_id: pid }).select()
       );
     }
   }
@@ -409,6 +426,96 @@ app.post('/api/master/inventory/add', authMiddleware, async (req, res) => {
 app.post('/api/inventory/:slotId/mod', authMiddleware, async (req, res) => { const { mod_item_id } = req.body; const { data: slot } = await supabase.from('inventory_slots').select('*, item:items(*)').eq('id', req.params.slotId).single(); if (!slot) return res.status(404).json({ error: 'Предмет не найден' }); const { data: modItem } = await supabase.from('items').select('*').eq('id', mod_item_id).single(); if (!modItem || modItem.slot !== 'mod') return res.status(400).json({ error: 'Это не модификация' }); if (modItem.mod_target !== 'any' && modItem.mod_target !== slot.item?.slot) return res.status(400).json({ error: 'Модификация не подходит к этому типу предмета' }); if (modItem.mod_target === 'weapon' && modItem.weapon_mod_subtype && modItem.weapon_mod_subtype !== 'any' && modItem.weapon_mod_subtype !== slot.item?.weapon_type) return res.status(400).json({ error: 'Модификация не подходит к этому типу оружия' }); const mods = slot.mods||[]; if (mods.find(m=>m.id===modItem.id)) return res.status(400).json({ error: 'Модификация уже установлена' }); mods.push({ id: modItem.id, name: modItem.name, description: modItem.description }); const { data, error } = await supabase.from('inventory_slots').update({ mods }).eq('id', req.params.slotId).select('*, item:items(*, ammo_type:ammo_types(*))').single(); if (error) return res.status(500).json({ error: error.message }); if (data?.character_id) { const { data: ch } = await supabase.from('characters').select('campaign_id').eq('id', data.character_id).single(); if (ch?.campaign_id) notifyCampaign(ch.campaign_id, 'inventory_updated', { character_id: data.character_id }); } res.json(data); });
 app.delete('/api/inventory/:slotId/mod/:modItemId', authMiddleware, async (req, res) => { const { data: slot } = await supabase.from('inventory_slots').select('*').eq('id', req.params.slotId).single(); if (!slot) return res.status(404).json({ error: 'Предмет не найден' }); const mods = (slot.mods||[]).filter(m=>m.id !== req.params.modItemId); const { data, error } = await supabase.from('inventory_slots').update({ mods }).eq('id', req.params.slotId).select('*, item:items(*, ammo_type:ammo_types(*))').single(); if (error) return res.status(500).json({ error: error.message }); if (data?.character_id) { const { data: ch } = await supabase.from('characters').select('campaign_id').eq('id', data.character_id).single(); if (ch?.campaign_id) notifyCampaign(ch.campaign_id, 'inventory_updated', { character_id: data.character_id }); } res.json(data); });
 
+// ===== BASE INVENTORY =====
+app.get('/api/campaigns/:id/base', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('base_inventory').select('*, item:items(*)').eq('campaign_id', req.params.id).order('created_at', { ascending: false });
+  res.json(data || []);
+});
+
+app.post('/api/campaigns/:id/base/deposit', authMiddleware, async (req, res) => {
+  const { slot_id, quantity } = req.body;
+  const { data: slot } = await supabase.from('inventory_slots').select('*, item:items(*)').eq('id', slot_id).single();
+  if (!slot) return res.status(404).json({ error: 'Предмет не найден в инвентаре' });
+  const { data: ch } = await supabase.from('characters').select('user_id').eq('id', slot.character_id).single();
+  if (!ch || ch.user_id !== req.user.id) return res.status(403).json({ error: 'Не ваш персонаж' });
+  
+  const depositQty = Math.min(quantity || 1, slot.quantity);
+  
+  // Добавляем в базу
+  const { data: existing } = await supabase.from('base_inventory').select('*').eq('campaign_id', req.params.id).eq('item_id', slot.item_id).single();
+  if (existing) {
+    await supabase.from('base_inventory').update({ quantity: existing.quantity + depositQty }).eq('id', existing.id);
+  } else {
+    await supabase.from('base_inventory').insert({ campaign_id: req.params.id, item_id: slot.item_id, quantity: depositQty, added_by: req.user.id });
+  }
+  
+  // Убираем из инвентаря
+  const remaining = slot.quantity - depositQty;
+  if (remaining <= 0) {
+    await supabase.from('inventory_slots').delete().eq('id', slot_id);
+  } else {
+    await supabase.from('inventory_slots').update({ quantity: remaining }).eq('id', slot_id);
+  }
+  
+  notifyCampaign(req.params.id, 'inventory_updated', { character_id: slot.character_id });
+  io.to(`campaign:${req.params.id}`).emit('base_updated', { campaignId: req.params.id });
+  
+  const { data: charData } = await supabase.from('characters').select('name').eq('id', slot.character_id).single();
+  const { data: msg } = await supabase.from('chat_messages').insert({
+    campaign_id: req.params.id, user_id: req.user.id, username: charData?.name || 'Игрок',
+    text: `${charData?.name} сдал на базу: ${slot.item?.name} ×${depositQty}`, is_roll: false
+  }).select().single();
+  if (msg) notifyCampaign(req.params.id, 'chat_message', msg);
+  
+  res.json({ success: true });
+});
+
+app.post('/api/campaigns/:id/base/withdraw', authMiddleware, async (req, res) => {
+  const { base_item_id, quantity } = req.body;
+  const { data: member } = await supabase.from('campaign_members').select('character_id').eq('campaign_id', req.params.id).eq('user_id', req.user.id).single();
+  if (!member?.character_id) return res.status(400).json({ error: 'У вас нет персонажа' });
+  
+  const { data: baseItem } = await supabase.from('base_inventory').select('*, item:items(*)').eq('id', base_item_id).single();
+  if (!baseItem) return res.status(404).json({ error: 'Предмет не найден на базе' });
+  
+  const withdrawQty = Math.min(quantity || 1, baseItem.quantity);
+  
+  // Добавляем в инвентарь
+  await supabase.from('inventory_slots').insert({
+    character_id: member.character_id, item_id: baseItem.item_id, quantity: withdrawQty,
+    slot_type: 'рюкзак', equipped: false
+  });
+  
+  // Убираем из базы
+  const remaining = baseItem.quantity - withdrawQty;
+  if (remaining <= 0) {
+    await supabase.from('base_inventory').delete().eq('id', base_item_id);
+  } else {
+    await supabase.from('base_inventory').update({ quantity: remaining }).eq('id', base_item_id);
+  }
+  
+  notifyCampaign(req.params.id, 'inventory_updated', { character_id: member.character_id });
+  io.to(`campaign:${req.params.id}`).emit('base_updated', { campaignId: req.params.id });
+  
+  const { data: charData } = await supabase.from('characters').select('name').eq('id', member.character_id).single();
+  const { data: msg } = await supabase.from('chat_messages').insert({
+    campaign_id: req.params.id, user_id: req.user.id, username: charData?.name || 'Игрок',
+    text: `${charData?.name} взял с базы: ${baseItem.item?.name} ×${withdrawQty}`, is_roll: false
+  }).select().single();
+  if (msg) notifyCampaign(req.params.id, 'chat_message', msg);
+  
+  res.json({ success: true });
+});
+
+app.put('/api/campaigns/:id/base/access', authMiddleware, async (req, res) => {
+  const { data: member } = await supabase.from('campaign_members').select('role').eq('campaign_id', req.params.id).eq('user_id', req.user.id).single();
+  if (!member || !['master', 'co-master'].includes(member.role)) return res.status(403).json({ error: 'Только для Мастера' });
+  const { base_access } = req.body;
+  await supabase.from('campaigns').update({ base_access }).eq('id', req.params.id);
+  io.to(`campaign:${req.params.id}`).emit('base_updated', { campaignId: req.params.id });
+  res.json({ success: true, base_access });
+});
+
 // ===== NPC =====
 app.get('/api/npcs', authMiddleware, async (req, res) => { const { campaign_id, is_template } = req.query; let q = supabase.from('npcs').select('*'); if (campaign_id) q = q.eq('campaign_id', campaign_id); if (is_template) q = q.eq('is_template', true); const { data } = await q; res.json(data||[]); });
 app.post('/api/npcs', authMiddleware, async (req, res) => { const { data, error } = await supabase.from('npcs').insert(req.body).select().single(); if (error) return res.status(500).json({ error: error.message }); if (data?.campaign_id) notifyCampaign(data.campaign_id, 'npcs_updated', { campaign_id: data.campaign_id }); res.json(data); });
@@ -416,7 +523,6 @@ app.put('/api/npcs/:id', authMiddleware, async (req, res) => { const { data: exi
 app.delete('/api/npcs/:id', authMiddleware, async (req, res) => { const { data: existing } = await supabase.from('npcs').select('campaign_id').eq('id', req.params.id).single(); await supabase.from('npcs').delete().eq('id', req.params.id); if (existing?.campaign_id) notifyCampaign(existing.campaign_id, 'npcs_updated', { campaign_id: existing.campaign_id }); res.json({ success: true }); });
 app.post('/api/npcs/:id/clone', authMiddleware, async (req, res) => { const { data: orig } = await supabase.from('npcs').select('*').eq('id', req.params.id).single(); if (!orig) return res.status(404).json({ error: 'Не найден' }); const { data: clone, error } = await supabase.from('npcs').insert({ name: req.body.name||`${orig.name} (копия)`, type: orig.type, health_thresholds: orig.health_thresholds, skills: orig.skills, special_properties: orig.special_properties, visibility: orig.visibility, campaign_id: orig.campaign_id, is_template: false }).select().single(); if (error) return res.status(500).json({ error: error.message }); if (clone?.campaign_id) notifyCampaign(clone.campaign_id, 'npcs_updated', { campaign_id: clone.campaign_id }); res.json(clone); });
 app.post('/api/npcs/:id/roll', authMiddleware, validate(schemas.npcRoll), async (req, res) => { const { data: npc } = await supabase.from('npcs').select('*').eq('id', req.params.id).single(); if (!npc) return res.status(404).json({ error: 'Не найден' }); const skill = (npc.skills||[]).find(s=>s.name===req.body.skill_name); if (!skill) return res.status(404).json({ error: 'Навык не найден' }); const mod = skill.modifier||0; const d20 = Math.floor(Math.random()*20)+1; res.json({ npc_name: npc.name, skill_name: req.body.skill_name, d20roll: d20, modifier: mod, sum: d20+mod, formula: `d20 (${d20}) + ${mod}` }); });
-
 // ===== ITEMS =====
 app.get('/api/items', authMiddleware, async (req, res) => { const { data } = await supabase.from('items').select('*, ammo_type:ammo_types(*)').order('name'); res.json(data); });
 app.post('/api/items', authMiddleware, validate(schemas.createItem), async (req, res) => { const { data, error } = await supabase.from('items').insert(req.body).select().single(); if (error) return res.status(500).json({ error: error.message }); res.json(data); });
