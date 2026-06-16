@@ -6,27 +6,6 @@ import { notifyCampaign } from '../socket.js';
 
 const router = Router();
 
-// GET /api/campaigns/:id/loot — используется через монтирование в server.js
-router.get('/campaigns/:id/loot', authMiddleware, async (req, res) => {
-  const { data } = await supabase.from('loot_pools')
-    .select('*').eq('campaign_id', req.params.id).order('created_at', { ascending: false });
-  res.json(data || []);
-});
-
-// POST /api/campaigns/:id/loot
-router.post('/campaigns/:id/loot', authMiddleware, async (req, res) => {
-  const { name, items } = req.body;
-  const { data: member } = await supabase.from('campaign_members')
-    .select('role').eq('campaign_id', req.params.id).eq('user_id', req.user.id).single();
-  if (!member || !['master', 'co-master'].includes(member.role)) {
-    return res.status(403).json({ error: 'Только для Мастера' });
-  }
-  const { data, error } = await supabase.from('loot_pools')
-    .insert({ campaign_id: req.params.id, name, items: items || [] }).select().single();
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-
 // PUT /api/loot/:id
 router.put('/:id', authMiddleware, async (req, res) => {
   const { name, items } = req.body;
