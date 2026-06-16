@@ -13,7 +13,6 @@ import campaignRoutes from './routes/campaigns.js';
 import characterRoutes from './routes/characters.js';
 import inventoryRoutes from './routes/inventory.js';
 import masterRoutes from './routes/master.js';
-import baseRoutes from './routes/base.js';
 import lootRoutes from './routes/loot.js';
 import npcRoutes from './routes/npc.js';
 import itemRoutes from './routes/items.js';
@@ -32,14 +31,23 @@ import characteristicRoutes from './routes/characteristics.js';
 import playlistRoutes from './routes/playlists.js';
 import subcategoryRoutes from './routes/subcategories.js';
 import backgroundRoutes from './routes/backgrounds.js';
+import professionRoutes from './routes/professions.js';
 
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+  }
 });
 
-app.use(cors({ origin: '*', allowedHeaders: ['Content-Type', 'Authorization'], methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] }));
+app.use(cors({
+  origin: '*',
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+}));
 app.options('*', (req, res) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -55,8 +63,7 @@ app.use('/api/campaigns', campaignRoutes);
 app.use('/api/characters', characterRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/master', masterRoutes);
-app.use('/api/base', baseRoutes); // заглушка — base внутри campaigns
-app.use('/api/loot', lootRoutes);
+app.use('/api', lootRoutes);              // /api/campaigns/:id/loot + /api/loot/:id/...
 app.use('/api/npcs', npcRoutes);
 app.use('/api/items', itemRoutes);
 app.use('/api/dice', diceRoutes);
@@ -74,6 +81,7 @@ app.use('/api/characteristics', characteristicRoutes);
 app.use('/api/playlists', playlistRoutes);
 app.use('/api/subcategories', subcategoryRoutes);
 app.use('/api/backgrounds', backgroundRoutes);
+app.use('/api', professionRoutes);        // /api/professions, /api/perks, /api/skills
 
 // Health check
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
