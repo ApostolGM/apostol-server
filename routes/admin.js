@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { supabase } from '../config/supabase.js';
 import { authMiddleware, adminMiddleware, validate, schemas } from '../middleware.js';
+import { notifyCampaign } from '../socket.js';
 
 const router = Router();
 router.use(authMiddleware, adminMiddleware);
@@ -35,8 +36,36 @@ router.post('/items', validate(schemas.createItem), async (req, res) => {
 });
 
 router.put('/items/:id', async (req, res) => {
-  const { data } = await supabase.from('items').update(req.body).eq('id', req.params.id).select().single();
-  res.json(data);
+  const updates = { ...req.body };
+
+  // Если icon_id передан — используем его, иначе оставляем icon
+  if (updates.icon_id === '') updates.icon_id = null;
+
+  const { data: item } = await supabase.from('items')
+    .update(updates).eq('id', req.params.id)
+    .select('*, ammo_type:ammo_types(*), item_slot:item_slots(*), icon_data:icons(*)').single();
+
+  // Если предмет динамический — обновляем свойства у всех экземпляров в инвентарях
+  if (item?.is_dynamic) {
+    const { data: slots } = await supabase.from('inventory_slots')
+      .select('id, character_id').eq('item_id', req.params.id);
+
+    // Оповещаем всех владельцев
+    const notifiedCampaigns = new Set();
+    for (const slot of (slots || [])) {
+      const { data: ch } = await supabase.from('characters')
+        .select('campaign_id').eq('id', slot.character_id).single();
+      if (ch?.campaign_id && !notifiedCampaigns.has(ch.campaign_id)) {
+        notifyCampaign(ch.campaign_id, 'item_updated', {
+          item_id: req.params.id,
+          updates: { name: item.name, description: item.description, weight: item.weight, icon_id: item.icon_id }
+        });
+        notifiedCampaigns.add(ch.campaign_id);
+      }
+    }
+  }
+
+  res.json(item);
 });
 
 router.delete('/items/:id', async (req, res) => {
@@ -336,6 +365,24 @@ router.get('/campaigns', async (req, res) => {
 
 router.delete('/campaigns/:id', async (req, res) => {
   await supabase.from('campaigns').delete().eq('id', req.params.id);
+  res.json({ success: true });
+});
+// ===== ICONS =====
+router.get('/icons', async (req, res) => {
+  const { data } = await supabase.from('icons').select('*').order('category').order('name');
+  res.json(data || []);
+});
+
+router.post('/icons', async (req, res) => {
+  const { name, url, category } = req.body;
+  const { data } = await supabase.from('icons').insert({
+    name, url, category: category || 'general'
+  }).select().single();
+  res.json(data);
+});
+
+router.delete('/icons/:id', async (req, res) => {
+  await supabase.from('icons').delete().eq('id', req.params.id);
   res.json({ success: true });
 });
 
