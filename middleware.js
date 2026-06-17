@@ -92,7 +92,8 @@ export const schemas = {
   }),
   diceAuto: Joi.object({
     character_id: Joi.string().uuid().required(),
-    skill_name: Joi.string().required()
+    skill_name: Joi.string().required(),
+    shots_count: Joi.number().integer().min(1).optional()
   }),
   npcRoll: Joi.object({
     skill_name: Joi.string().required()
@@ -115,27 +116,41 @@ export const schemas = {
     campaign_id: Joi.string().uuid().allow(null),
     is_global: Joi.boolean().default(false)
   }),
- createItem: Joi.object({
-  name: Joi.string().required(),
-  slot: Joi.string().valid('weapon', 'armor', 'exo', 'mod', 'ammo', 'consumable', 'item', 'currency', 'container').required(),
-  subcategory: Joi.string().allow('', null).optional(),
-  icon: Joi.string().allow('', null).optional(),
-  weight: Joi.number().min(0).optional(),
-  condition_percent: Joi.number().min(0).max(100).optional(),
-  description: Joi.string().allow('').optional(),
-  trade_price: Joi.number().min(0).optional(),
-  weapon_type: Joi.string().valid('melee','ranged','thrown').allow(null, '').optional(),
-  max_ammo: Joi.number().min(0).optional(),
-  is_heavy: Joi.boolean().optional(),
-  ammo_type_id: Joi.string().uuid().allow(null, '').optional(),
-  accepted_ammo_types: Joi.array().items(Joi.string().uuid()).optional(),
-  mod_target: Joi.string().valid('weapon','armor','exo','any').allow(null, '').optional(),
-  weapon_mod_subtype: Joi.string().valid('melee','ranged','thrown','any').allow(null, '').optional(),
-  is_global: Joi.boolean().default(true).optional(),
-  // Содержимое контейнера
-  container_items: Joi.array().items(Joi.object({
-    item_id: Joi.string().uuid().required(),
-    quantity: Joi.number().integer().min(1).default(1)
-  })).default([]).optional(),
-}),
+  createItem: Joi.object({
+    name: Joi.string().required(),
+    slot: Joi.string().optional(),
+    item_slot_id: Joi.string().uuid().allow(null).optional(),
+    subcategory: Joi.string().allow('', null).optional(),
+    icon: Joi.string().allow('', null).optional(),
+    weight: Joi.number().min(0).optional(),
+    condition_percent: Joi.number().min(0).max(100).optional(),
+    description: Joi.string().allow('').optional(),
+    trade_price: Joi.number().min(0).optional(),
+    weapon_type: Joi.string().valid('melee','ranged','thrown').allow(null, '').optional(),
+    max_ammo: Joi.number().min(0).optional(),
+    is_heavy: Joi.boolean().optional(),
+    ammo_type_id: Joi.string().uuid().allow(null, '').optional(),
+    accepted_ammo_types: Joi.array().items(Joi.string().uuid()).optional(),
+    mod_item_slot_id: Joi.string().uuid().allow(null, '').optional(),
+    is_global: Joi.boolean().default(true).optional(),
+    container_items: Joi.array().items(Joi.object({
+      item_id: Joi.string().uuid().required(),
+      quantity: Joi.number().integer().min(1).default(1)
+    })).default([]).optional(),
+    linked_skill_ids: Joi.array().items(Joi.string().uuid()).default([]).optional(),
+    skill_coefficients: Joi.array().items(Joi.object({
+      skill_id: Joi.string().uuid().required(),
+      coefficient: Joi.number().default(1.0)
+    })).default([]).optional(),
+    shots_per_action: Joi.number().integer().min(1).default(1).optional(),
+    ammo_per_shot: Joi.number().integer().min(1).default(1).optional(),
+  }),
+  updateCharacterParams: Joi.object({
+    carry_weight_max: Joi.number().min(0).optional(),
+    currency: Joi.number().min(0).optional(),
+    statuses: Joi.array().items(Joi.object({
+      status_id: Joi.string().uuid().required(),
+      value: Joi.number().required()
+    })).optional()
+  }),
 };
