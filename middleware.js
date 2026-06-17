@@ -108,7 +108,7 @@ export const schemas = {
   uploadFile: Joi.object({
     image: Joi.string().max(50 * 1024 * 1024).required(),
     name: Joi.string().required(),
-    campaign_id: Joi.string().uuid()
+    campaign_id: Joi.string().uuid().allow(null, '').optional()
   }),
   uploadSound: Joi.object({
     sound_data: Joi.string().required(),
@@ -119,13 +119,15 @@ export const schemas = {
   createItem: Joi.object({
     name: Joi.string().required(),
     slot: Joi.string().optional(),
-    item_slot_id: Joi.string().uuid().allow(null).optional(),
+    item_slot_id: Joi.string().uuid().allow(null, '').optional(),
     subcategory: Joi.string().allow('', null).optional(),
     icon: Joi.string().allow('', null).optional(),
+    icon_id: Joi.string().uuid().allow(null, '').optional(),
     weight: Joi.number().min(0).optional(),
     condition_percent: Joi.number().min(0).max(100).optional(),
     description: Joi.string().allow('').optional(),
     trade_price: Joi.number().min(0).optional(),
+    is_dynamic: Joi.boolean().optional(),
     weapon_type: Joi.string().valid('melee','ranged','thrown').allow(null, '').optional(),
     max_ammo: Joi.number().min(0).optional(),
     is_heavy: Joi.boolean().optional(),
