@@ -39,13 +39,9 @@ router.post('/sound', authMiddleware, validate(schemas.uploadSound), async (req,
     const url = result.secure_url;
     if (campaign_id || is_global) {
       await supabase.from('sounds').insert({
-        campaign_id: is_global ? null : campaign_id,
-        name,
-        file_url: url,
-        source_type: 'upload',
-        duration: result.duration || 0,
-        category: 'общее',
-        is_global: is_global || false
+        campaign_id: is_global ? null : campaign_id, name, file_url: url,
+        source_type: 'upload', duration: result.duration || 0,
+        category: 'общее', is_global: is_global || false
       });
     }
     res.json({ url, name, duration: result.duration, success: true });
