@@ -7,7 +7,7 @@ import { notifyCampaign } from '../socket.js';
 
 const router = Router();
 
-// POST /api/characters — создать персонажа
+// POST /api/characters
 router.post('/', authMiddleware, validate(schemas.createCharacter), async (req, res) => {
   const { campaign_id, name, profession_id, perk_ids, perk_data } = req.body;
 
@@ -29,13 +29,14 @@ router.post('/', authMiddleware, validate(schemas.createCharacter), async (req, 
 
   const { data: ch, error } = await supabase.from('characters').insert({
     user_id: req.user.id, campaign_id, name, profession_id,
-    balance_points: bp, food: 100, water: 100, stress: 0
+    balance_points: bp
   }).select().single();
 
   if (error) return res.status(500).json({ error: error.message });
 
   const insertPromises = [];
 
+  // Стартовые навыки профессии
   for (const ss of (prof.starter_skills || [])) {
     const { data: sk } = await supabase.from('skills').select('id').eq('name', ss.skill).single();
     if (sk) {
@@ -47,18 +48,27 @@ router.post('/', authMiddleware, validate(schemas.createCharacter), async (req, 
     }
   }
 
+  // Перки
   if (perk_ids?.length) {
     const pd = perk_data || [];
     for (const pid of perk_ids) {
       const pdd = pd.find(p => String(p.perk_id) === String(pid));
       insertPromises.push(
         supabase.from('character_perks').insert({
-          character_id: ch.id,
-          perk_id: pid,
-          linked_perk_id: pdd?.linked_perk_id || null
+          character_id: ch.id, perk_id: pid, linked_perk_id: pdd?.linked_perk_id || null
         })
       );
     }
+  }
+
+  // Статусы по умолчанию
+  const { data: defaultStatuses } = await supabase.from('character_statuses').select('*').eq('is_global', true);
+  for (const st of (defaultStatuses || [])) {
+    insertPromises.push(
+      supabase.from('character_status_values').insert({
+        character_id: ch.id, status_id: st.id, value: st.default_value
+      })
+    );
   }
 
   insertPromises.push(
@@ -84,23 +94,31 @@ router.get('/:id', authMiddleware, async (req, res) => {
 });
 
 // PUT /api/characters/:id/params
-router.put('/:id/params', authMiddleware, async (req, res) => {
-  const allowed = ['food', 'water', 'stress', 'carry_weight_max', 'currency'];
+router.put('/:id/params', authMiddleware, validate(schemas.updateCharacterParams), async (req, res) => {
+  const { carry_weight_max, currency, statuses } = req.body;
   const updates = {};
-  for (const k of allowed) {
-    if (req.body[k] !== undefined) updates[k] = req.body[k];
+  if (carry_weight_max !== undefined) updates.carry_weight_max = carry_weight_max;
+  if (currency !== undefined) updates.currency = currency;
+
+  if (Object.keys(updates).length > 0) {
+    const { error } = await supabase.from('characters').update(updates).eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
   }
 
-  const { data, error } = await supabase.from('characters')
-    .update(updates).eq('id', req.params.id).select('*').single();
-
-  if (error) return res.status(500).json({ error: error.message });
-  if (data?.campaign_id) {
-    notifyCampaign(data.campaign_id, 'character_updated', {
-      character_id: req.params.id, updates
-    });
+  // Обновляем статусы
+  if (statuses?.length) {
+    for (const st of statuses) {
+      await supabase.from('character_status_values')
+        .upsert({ character_id: req.params.id, status_id: st.status_id, value: st.value },
+          { onConflict: 'character_id, status_id' });
+    }
   }
-  res.json(data);
+
+  const { data: ch } = await supabase.from('characters').select('*').eq('id', req.params.id).single();
+  if (ch?.campaign_id) {
+    notifyCampaign(ch.campaign_id, 'character_updated', { character_id: req.params.id, updates: req.body });
+  }
+  res.json({ success: true });
 });
 
 // DELETE /api/characters/:id
@@ -116,6 +134,7 @@ router.delete('/:id', authMiddleware, async (req, res) => {
   }
 
   await Promise.all([
+    supabase.from('character_status_values').delete().eq('character_id', req.params.id),
     supabase.from('campaign_members').update({ character_id: null }).eq('character_id', req.params.id),
     supabase.from('inventory_slots').delete().eq('character_id', req.params.id),
     supabase.from('character_skills').delete().eq('character_id', req.params.id),
@@ -134,14 +153,14 @@ router.get('/:id/weight', authMiddleware, async (req, res) => {
   if (!ch) return res.status(404).json({ error: 'Персонаж не найден' });
 
   const { data: slots } = await supabase.from('inventory_slots')
-    .select('quantity, item:items(weight, slot, is_container), children:inventory_slots(quantity, item:items(weight))')
+    .select('quantity, item:items(weight, item_slot_id, slot), children:inventory_slots(quantity, item:items(weight))')
     .eq('character_id', ch.id).is('parent_slot_id', null);
 
   let totalWeight = 0;
   for (const s of (slots || [])) {
-    if (s.item?.slot === 'currency') continue;
+    if (s.item?.slot === 'currency' || s.item?.item_slot_id === (await getSlotId('currency'))) continue;
     totalWeight += (s.item?.weight || 0) * (s.quantity || 1);
-    if (s.item?.is_container && s.children) {
+    if (s.children) {
       for (const child of s.children) {
         totalWeight += (child.item?.weight || 0) * (child.quantity || 1);
       }
@@ -159,34 +178,23 @@ router.get('/:id/weight', authMiddleware, async (req, res) => {
 router.post('/:id/skills', authMiddleware, async (req, res) => {
   const { skill_id, modifier } = req.body;
   const { data, error } = await supabase.from('character_skills')
-    .insert({ character_id: req.params.id, skill_id, modifier: modifier || 0 })
-    .select().single();
-
+    .insert({ character_id: req.params.id, skill_id, modifier: modifier || 0 }).select().single();
   if (error) return res.status(500).json({ error: error.message });
 
-  const { data: ch } = await supabase.from('characters')
-    .select('campaign_id').eq('id', req.params.id).single();
-  if (ch?.campaign_id) {
-    notifyCampaign(ch.campaign_id, 'character_skills_updated', { character_id: req.params.id });
-  }
+  const { data: ch } = await supabase.from('characters').select('campaign_id').eq('id', req.params.id).single();
+  if (ch?.campaign_id) notifyCampaign(ch.campaign_id, 'character_skills_updated', { character_id: req.params.id });
   res.json(data);
 });
 
 // PUT /api/characters/:id/skills/:skillId
 router.put('/:id/skills/:skillId', authMiddleware, async (req, res) => {
   const { modifier } = req.body;
-  const { data, error } = await supabase.from('character_skills')
-    .update({ modifier }).eq('character_id', req.params.id)
-    .eq('skill_id', req.params.skillId).select().single();
+  await supabase.from('character_skills').update({ modifier })
+    .eq('character_id', req.params.id).eq('skill_id', req.params.skillId);
 
-  if (error) return res.status(500).json({ error: error.message });
-
-  const { data: ch } = await supabase.from('characters')
-    .select('campaign_id').eq('id', req.params.id).single();
-  if (ch?.campaign_id) {
-    notifyCampaign(ch.campaign_id, 'character_skills_updated', { character_id: req.params.id });
-  }
-  res.json(data);
+  const { data: ch } = await supabase.from('characters').select('campaign_id').eq('id', req.params.id).single();
+  if (ch?.campaign_id) notifyCampaign(ch.campaign_id, 'character_skills_updated', { character_id: req.params.id });
+  res.json({ success: true });
 });
 
 // DELETE /api/characters/:id/skills/:skillId
@@ -194,12 +202,20 @@ router.delete('/:id/skills/:skillId', authMiddleware, async (req, res) => {
   await supabase.from('character_skills').delete()
     .eq('character_id', req.params.id).eq('skill_id', req.params.skillId);
 
-  const { data: ch } = await supabase.from('characters')
-    .select('campaign_id').eq('id', req.params.id).single();
-  if (ch?.campaign_id) {
-    notifyCampaign(ch.campaign_id, 'character_skills_updated', { character_id: req.params.id });
-  }
+  const { data: ch } = await supabase.from('characters').select('campaign_id').eq('id', req.params.id).single();
+  if (ch?.campaign_id) notifyCampaign(ch.campaign_id, 'character_skills_updated', { character_id: req.params.id });
   res.json({ success: true });
 });
+
+// GET /api/character-statuses
+router.get('/statuses/global', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('character_statuses').select('*').eq('is_global', true).order('sort_order');
+  res.json(data || []);
+});
+
+async function getSlotId(name) {
+  const { data } = await supabase.from('item_slots').select('id').eq('name', name).single();
+  return data?.id;
+}
 
 export default router;
