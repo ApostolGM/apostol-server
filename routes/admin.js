@@ -11,7 +11,7 @@ router.use(authMiddleware, adminMiddleware);
 router.get('/items', async (req, res) => {
   try {
     const { data } = await supabase.from('items')
-      .select('*, ammo_type:ammo_types(*), item_slot:item_slots(*), icon_data:icons(*)')
+      .select('*, ammo_type:ammo_types(*), item_slot:item_slots!items_item_slot_id_fkey(*), icon_data:icons!items_icon_id_fkey(*)')
       .order('name');
     res.json(data || []);
   } catch (err) {
@@ -27,7 +27,6 @@ router.post('/items', validate(schemas.createItem), async (req, res) => {
       console.error('INSERT ITEM ERROR:', error);
       return res.status(500).json({ error: error.message });
     }
-
     if (item.item_slot_id) {
       const { data: slot } = await supabase.from('item_slots').select('name').eq('id', item.item_slot_id).single();
       if (slot?.name === 'weapon' && item.weapon_type === 'ranged' && item.ammo_type_id) {
@@ -35,7 +34,7 @@ router.post('/items', validate(schemas.createItem), async (req, res) => {
         if (ammoType) {
           await supabase.from('items').insert({
             name: `${ammoType.name} для ${item.name}`,
-            slot: 'ammo', weight: 0.1, trade_price: 10,
+            weight: 0.1, trade_price: 10,
             ammo_type_id: item.ammo_type_id, is_global: true
           });
         }
@@ -55,12 +54,11 @@ router.put('/items/:id', async (req, res) => {
 
     const { data: item } = await supabase.from('items')
       .update(updates).eq('id', req.params.id)
-      .select('*, ammo_type:ammo_types(*), item_slot:item_slots(*), icon_data:icons(*)').single();
+      .select('*, ammo_type:ammo_types(*), item_slot:item_slots!items_item_slot_id_fkey(*), icon_data:icons!items_icon_id_fkey(*)').single();
 
     if (item?.is_dynamic) {
       const { data: slots } = await supabase.from('inventory_slots')
         .select('id, character_id').eq('item_id', req.params.id);
-
       const notifiedCampaigns = new Set();
       for (const slot of (slots || [])) {
         const { data: ch } = await supabase.from('characters')
@@ -200,7 +198,7 @@ router.delete('/professions/:id', async (req, res) => {
 router.get('/skills', async (req, res) => {
   try {
     const { data } = await supabase.from('skills')
-      .select('*, characteristic:characteristics(*), parent:skills(name)').order('name');
+      .select('*, characteristic:characteristics(*), parent:skills!skills_parent_skill_id_fkey(name)').order('name');
     res.json(data || []);
   } catch (err) {
     console.error('GET /admin/skills ERROR:', err);
@@ -244,7 +242,8 @@ router.delete('/skills/:id', async (req, res) => {
 router.get('/skill-links', async (req, res) => {
   try {
     const { data } = await supabase.from('skill_links')
-      .select('*, parent:skills(name), child:skills(name)').order('parent_skill_id');
+      .select('*, parent:skills!skill_links_parent_skill_id_fkey(name), child:skills!skill_links_child_skill_id_fkey(name)')
+      .order('parent_skill_id');
     res.json(data || []);
   } catch (err) {
     console.error('GET /admin/skill-links ERROR:', err);
@@ -311,7 +310,7 @@ router.delete('/item-slots/:id', async (req, res) => {
 router.get('/inventory-cells', async (req, res) => {
   try {
     const { data } = await supabase.from('inventory_cells')
-      .select('*, item_slot:item_slots(*)').order('sort_order');
+      .select('*, item_slot:item_slots!inventory_cells_item_slot_id_fkey(*)').order('sort_order');
     res.json(data || []);
   } catch (err) {
     console.error('GET /admin/inventory-cells ERROR:', err);
@@ -390,7 +389,7 @@ router.delete('/character-statuses/:id', async (req, res) => {
 // ===== CRAFT STATIONS =====
 router.get('/craft-stations', async (req, res) => {
   try {
-    const { data } = await supabase.from('craft_stations').select('*, item:items(*)').order('name');
+    const { data } = await supabase.from('craft_stations').select('*, item:items(name)').order('name');
     res.json(data || []);
   } catch (err) {
     console.error('GET /admin/craft-stations ERROR:', err);
@@ -425,7 +424,7 @@ router.delete('/craft-stations/:id', async (req, res) => {
 router.get('/craft-recipes', async (req, res) => {
   try {
     const { data } = await supabase.from('craft_recipes')
-      .select('*, skill:skills(name), station:craft_stations(name), result_item:items(name), ingredients:craft_ingredients(*, item:items(name, icon))')
+      .select('*, skill:skills(name), station:craft_stations(name), result_item:items(name), ingredients:craft_ingredients(*, item:items(name, icon_id))')
       .order('name');
     res.json(data || []);
   } catch (err) {
@@ -452,7 +451,7 @@ router.post('/craft-recipes', async (req, res) => {
     }
 
     const { data: full } = await supabase.from('craft_recipes')
-      .select('*, skill:skills(name), station:craft_stations(name), result_item:items(name), ingredients:craft_ingredients(*, item:items(name, icon))')
+      .select('*, skill:skills(name), station:craft_stations(name), result_item:items(name), ingredients:craft_ingredients(*, item:items(name, icon_id))')
       .eq('id', recipe.id).single();
     res.json(full);
   } catch (err) {
@@ -476,7 +475,7 @@ router.put('/craft-recipes/:id', async (req, res) => {
     }
 
     const { data } = await supabase.from('craft_recipes')
-      .select('*, skill:skills(name), station:craft_stations(name), result_item:items(name), ingredients:craft_ingredients(*, item:items(name, icon))')
+      .select('*, skill:skills(name), station:craft_stations(name), result_item:items(name), ingredients:craft_ingredients(*, item:items(name, icon_id))')
       .eq('id', req.params.id).single();
     res.json(data);
   } catch (err) {
