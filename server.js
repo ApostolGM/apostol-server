@@ -77,10 +77,15 @@ app.use('/api/handouts', handoutRoutes);
 app.use('/api/sounds', soundRoutes);
 app.use('/api/shop', shopRoutes);
 app.use('/api/upload', uploadRoutes);
+
+// Debug (временно)
 app.get('/api/debug-items', async (req, res) => {
-  const { data, error } = await supabase.from('items').select('*, item_slot:item_slots(*)').limit(3);
+  const { data, error } = await supabase.from('items')
+    .select('*, item_slot:item_slots!items_item_slot_id_fkey(*)')
+    .limit(3);
   res.json({ count: data?.length, error: error?.message, data });
 });
+
 app.use('/api/admin', adminRoutes);
 app.use('/api/ammo-types', ammoRoutes);
 app.use('/api/currencies', currencyRoutes);
