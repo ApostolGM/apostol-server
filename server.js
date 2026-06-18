@@ -44,6 +44,8 @@ const io = new Server(httpServer, {
   }
 });
 
+app.set('trust proxy', 1);
+
 app.use(cors({
   origin: '*',
   allowedHeaders: ['Content-Type', 'Authorization'],
