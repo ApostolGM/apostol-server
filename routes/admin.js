@@ -634,5 +634,124 @@ router.delete('/campaigns/:id', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// ===== EDIT MISSING =====
+
+// Item Slots — редактирование
+router.put('/item-slots/:id', async (req, res) => {
+  try {
+    const { name, description } = req.body;
+    const { data } = await supabase.from('item_slots').update({ name, description }).eq('id', req.params.id).select().single();
+    res.json(data);
+  } catch (err) {
+    console.error('PUT /admin/item-slots/:id ERROR:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Icons — редактирование
+router.put('/icons/:id', async (req, res) => {
+  try {
+    const { name, category } = req.body;
+    const { data } = await supabase.from('icons').update({ name, category }).eq('id', req.params.id).select().single();
+    res.json(data);
+  } catch (err) {
+    console.error('PUT /admin/icons/:id ERROR:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Skill Links — редактирование
+router.put('/skill-links/:id', async (req, res) => {
+  try {
+    const { coefficient } = req.body;
+    const { data } = await supabase.from('skill_links').update({ coefficient }).eq('id', req.params.id).select().single();
+    res.json(data);
+  } catch (err) {
+    console.error('PUT /admin/skill-links/:id ERROR:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Characteristics — редактирование
+router.put('/characteristics/:id', async (req, res) => {
+  try {
+    const { data } = await supabase.from('characteristics').update(req.body).eq('id', req.params.id).select().single();
+    res.json(data);
+  } catch (err) {
+    console.error('PUT /admin/characteristics/:id ERROR:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Character Statuses — редактирование
+router.put('/character-statuses/:id', async (req, res) => {
+  try {
+    const { data } = await supabase.from('character_statuses').update(req.body).eq('id', req.params.id).select().single();
+    res.json(data);
+  } catch (err) {
+    console.error('PUT /admin/character-statuses/:id ERROR:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Ammo Types — редактирование
+router.put('/ammo-types/:id', async (req, res) => {
+  try {
+    const { name } = req.body;
+    const { data } = await supabase.from('ammo_types').update({ name }).eq('id', req.params.id).select().single();
+    res.json(data);
+  } catch (err) {
+    console.error('PUT /admin/ammo-types/:id ERROR:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Currencies — редактирование
+router.put('/currencies/:id', async (req, res) => {
+  try {
+    const { name, icon } = req.body;
+    const { data } = await supabase.from('currencies').update({ name, icon }).eq('id', req.params.id).select().single();
+    res.json(data);
+  } catch (err) {
+    console.error('PUT /admin/currencies/:id ERROR:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Playlists — редактирование
+router.put('/playlists/:id', async (req, res) => {
+  try {
+    const { name } = req.body;
+    const { data } = await supabase.from('playlists').update({ name }).eq('id', req.params.id).select().single();
+    res.json(data);
+  } catch (err) {
+    console.error('PUT /admin/playlists/:id ERROR:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Subcategories — редактирование
+router.put('/subcategories/:id', async (req, res) => {
+  try {
+    const { name, slot } = req.body;
+    const { data } = await supabase.from('subcategories').update({ name, slot }).eq('id', req.params.id).select().single();
+    res.json(data);
+  } catch (err) {
+    console.error('PUT /admin/subcategories/:id ERROR:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Sounds — редактирование
+router.put('/sounds/:id', async (req, res) => {
+  try {
+    const { name, category, playlist_id } = req.body;
+    const { data } = await supabase.from('sounds').update({ name, category, playlist_id }).eq('id', req.params.id).select().single();
+    res.json(data);
+  } catch (err) {
+    console.error('PUT /admin/sounds/:id ERROR:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 export default router;
