@@ -198,7 +198,7 @@ router.delete('/professions/:id', async (req, res) => {
 router.get('/skills', async (req, res) => {
   try {
     const { data } = await supabase.from('skills')
-      .select('*, characteristic:characteristics(*), parent:skills!skills_parent_skill_id_fkey(name)').order('name');
+     .select('*, characteristic:characteristics(*)')
     res.json(data || []);
   } catch (err) {
     console.error('GET /admin/skills ERROR:', err);
