@@ -35,11 +35,10 @@ router.post('/auto', authMiddleware, diceLimiter, validate(schemas.diceAuto), as
     }
   }
 
-  // Бонус от родительских навыков
+  // Бонус от родительских навыков через skill_links
   let linkBonus = 0;
   const { data: childLinks } = await supabase.from('skill_links')
     .select('*, parent:skills(*)').eq('child_skill_id', skill.id);
-
   for (const link of (childLinks || [])) {
     const parentMod = (cs || []).find(e => e.skill_id === link.parent_skill_id)?.modifier || 0;
     linkBonus += Math.round(parentMod * (link.coefficient || 1.0));
@@ -62,8 +61,8 @@ router.post('/auto', authMiddleware, diceLimiter, validate(schemas.diceAuto), as
     shots,
     rolls,
     formula: shots > 1
-      ? rolls.map((r, i) => `Выстрел ${i + 1}: d20 (${r.d20}) + ${r.bonus} = ${r.sum}`).join(' | ')
-      : `d20 (${rolls[0].d20}) + ${rolls[0].bonus} (${totalPercent}%) = ${rolls[0].sum}`
+      ? rolls.map((r, i) => `Выстрел ${i + 1}: d20(${r.d20}) + ${r.bonus} = ${r.sum}`).join(' | ')
+      : `d20(${rolls[0].d20}) + ${rolls[0].bonus} (${totalPercent}%) = ${rolls[0].sum}`
   });
 });
 
