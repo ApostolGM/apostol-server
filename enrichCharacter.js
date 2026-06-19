@@ -97,19 +97,20 @@ export async function enrichCharacter(ch) {
 
     // Обогащаем инвентарь
     const enrichedInventory = (inv || []).map(slot => {
-      const children = slot.children || [];
-      let totalWeight = slot.item?.weight || 0;
-      if (slot.item?.item_slot?.name === 'container' && children.length > 0) {
-        for (const child of children) {
-          totalWeight += (child.item?.weight || 0) * (child.quantity || 1);
-        }
-      }
-      return {
-        ...slot,
-        containerWeight: slot.item?.item_slot?.name === 'container' ? totalWeight : null,
-        children
-      };
-    });
+  const children = slot.children || [];
+  let totalWeight = slot.item?.weight || 0;
+  if (slot.item?.item_slot?.name === 'container' && children.length > 0) {
+    for (const child of children) {
+      totalWeight += (child.item?.weight || 0) * (child.quantity || 1);
+    }
+  }
+  return {
+    ...slot,
+    containerWeight: slot.item?.item_slot?.name === 'container' ? totalWeight : null,
+    rules: slot.item?.item_slot?.rules || {},
+    children
+  };
+});
 
     // Статусы
     const statuses = (statusValues || []).map(sv => ({
