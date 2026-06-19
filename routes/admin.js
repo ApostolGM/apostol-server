@@ -27,9 +27,11 @@ router.post('/items', validate(schemas.createItem), async (req, res) => {
       console.error('INSERT ITEM ERROR:', error);
       return res.status(500).json({ error: error.message });
     }
-    if (item.item_slot_id) {
-      const { data: slot } = await supabase.from('item_slots').select('name').eq('id', item.item_slot_id).single();
-      if (slot?.name === 'weapon' && item.weapon_type === 'ranged' && item.ammo_type_id) {
+   if (item.item_slot_id && item.ammo_type_id) {
+  const { data: slot } = await supabase.from('item_slots').select('name, rules').eq('id', item.item_slot_id).single();
+  const rules = slot?.rules || {};
+  const hasRangedAttack = (rules.actions || []).some(a => a.name === 'attack' && a.consume_ammo);
+  if (hasRangedAttack) {
         const { data: ammoType } = await supabase.from('ammo_types').select('name').eq('id', item.ammo_type_id).single();
         if (ammoType) {
           await supabase.from('items').insert({
