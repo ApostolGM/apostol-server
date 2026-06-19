@@ -80,6 +80,21 @@ router.put('/items/:id', async (req, res) => {
   }
 });
 
+router.put('/item-slots/:id', async (req, res) => {
+  try {
+    const { name, description, rules } = req.body;
+    const updates = {};
+    if (name !== undefined) updates.name = name;
+    if (description !== undefined) updates.description = description;
+    if (rules !== undefined) updates.rules = rules;
+    const { data } = await supabase.from('item_slots').update(updates).eq('id', req.params.id).select().single();
+    res.json(data);
+  } catch (err) {
+    console.error('PUT /admin/item-slots/:id ERROR:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.delete('/items/:id', async (req, res) => {
   try {
     await supabase.from('items').delete().eq('id', req.params.id);
@@ -111,6 +126,9 @@ router.put('/items/batch-price', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Item Slots — обновление правил
+updateItemSlotRules: (id, rules) => request(`/admin/item-slots/${id}`, { method: 'PUT', body: JSON.stringify({ rules }) }),
 
 // ===== PERKS =====
 router.get('/perks', async (req, res) => {
