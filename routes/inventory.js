@@ -40,7 +40,6 @@ router.post('/add', authMiddleware, async (req, res) => {
 
   if (error) return res.status(500).json({ error: error.message });
 
-  // Контейнер: создаём дочерние слоты
   if (slotName === 'container' && item.container_items?.length > 0) {
     const parentSlotId = data.id;
     for (const ci of item.container_items) {
@@ -90,80 +89,48 @@ router.post('/equip', authMiddleware, async (req, res) => {
     .select('user_id, campaign_id').eq('id', slot.character_id).single();
   if (!ch || ch.user_id !== req.user.id) return res.status(403).json({ error: 'Не ваш персонаж' });
 
-  const itemSlotName = slot.item?.item_slot?.name || slot.item?.slot;
+  const rules = slot.item?.item_slot?.rules || {};
   const cid = slot.character_id;
 
-  // Если указан cell_id — используем конкретную ячейку
+  if (!rules.equippable) {
+    return res.status(400).json({ error: 'Этот предмет нельзя экипировать' });
+  }
+
   if (cell_id) {
     const { data: cell } = await supabase.from('inventory_cells')
       .select('*, item_slot:item_slots(*)').eq('id', cell_id).single();
     if (!cell) return res.status(400).json({ error: 'Ячейка не найдена' });
 
-    if (cell.item_slot_id) {
-      const { data: cellSlot } = await supabase.from('item_slots').select('id').eq('id', cell.item_slot_id).single();
-      const { data: itemSlot } = await supabase.from('item_slots').select('id').eq('name', itemSlotName).single();
-      if (cellSlot?.id !== itemSlot?.id) {
-        return res.status(400).json({ error: `В ячейку "${cell.name}" можно экипировать только "${cell.item_slot?.name}"` });
-      }
+    if (cell.item_slot_id && cell.item_slot_id !== slot.item?.item_slot_id) {
+      return res.status(400).json({ error: `В ячейку "${cell.name}" нельзя экипировать "${slot.item?.item_slot?.name}"` });
     }
 
     await supabase.from('inventory_slots').update({ equipped: false, slot_type: 'рюкзак' })
       .eq('character_id', cid).eq('equipped', true).eq('slot_type', cell.name);
 
-    const { data, error } = await supabase.from('inventory_slots')
+    const { data } = await supabase.from('inventory_slots')
       .update({ equipped: true, slot_type: cell.name }).eq('id', slot_id)
       .select('*, item:items(*, ammo_type:ammo_types(*), item_slot:item_slots(*))').single();
-    if (error) return res.status(500).json({ error: error.message });
     if (ch.campaign_id) notifyCampaign(ch.campaign_id, 'inventory_updated', { character_id: cid });
     return res.json(data);
   }
 
-  // Старая логика для рук/тела/экзо (обратная совместимость)
-  if (itemSlotName === 'weapon') {
-    const { data: hands } = await supabase.from('inventory_slots')
-      .select('*, item:items(*, item_slot:item_slots(*))').eq('character_id', cid)
-      .eq('equipped', true).in('slot_type', ['правая_рука','левая_рука']);
+  const { data: cells } = await supabase.from('inventory_cells')
+    .select('*').eq('item_slot_id', slot.item?.item_slot_id).order('sort_order');
 
-    let usedSlots = 0;
-    for (const h of hands) usedSlots += (h.item?.is_heavy ? 2 : 1);
-    const needed = slot.item.is_heavy ? 2 : 1;
-    if (usedSlots + needed > 2) return res.status(400).json({ error: 'Не хватает слотов рук' });
-
-    if (slot.item.is_heavy) {
-      for (const h of hands) await supabase.from('inventory_slots').update({ equipped: false, slot_type: 'рюкзак' }).eq('id', h.id);
-      const { data } = await supabase.from('inventory_slots')
-        .update({ equipped: true, slot_type: 'правая_рука' }).eq('id', slot_id)
-        .select('*, item:items(*, ammo_type:ammo_types(*), item_slot:item_slots(*))').single();
-      if (ch.campaign_id) notifyCampaign(ch.campaign_id, 'inventory_updated', { character_id: cid });
-      return res.json(data);
-    } else {
-      const occupied = hands.map(h => h.slot_type);
-      let target = occupied.includes('правая_рука') ? 'левая_рука' : 'правая_рука';
-      if (occupied.includes('правая_рука') && occupied.includes('левая_рука')) {
-        const left = hands.find(h => h.slot_type === 'левая_рука');
-        if (left) await supabase.from('inventory_slots').update({ equipped: false, slot_type: 'рюкзак' }).eq('id', left.id);
-        target = 'левая_рука';
-      }
-      const { data } = await supabase.from('inventory_slots')
-        .update({ equipped: true, slot_type: target }).eq('id', slot_id)
-        .select('*, item:items(*, ammo_type:ammo_types(*), item_slot:item_slots(*))').single();
-      if (ch.campaign_id) notifyCampaign(ch.campaign_id, 'inventory_updated', { character_id: cid });
-      return res.json(data);
-    }
-  }
-
-  if (['armor','exo'].includes(itemSlotName)) {
-    const targetSlot = itemSlotName === 'armor' ? 'тело' : 'экзоскелет';
+  if (cells?.length > 0) {
+    const targetCell = cells[0];
     await supabase.from('inventory_slots').update({ equipped: false, slot_type: 'рюкзак' })
-      .eq('character_id', cid).eq('slot_type', targetSlot).neq('id', slot_id);
+      .eq('character_id', cid).eq('equipped', true).eq('slot_type', targetCell.name);
+
     const { data } = await supabase.from('inventory_slots')
-      .update({ equipped: true, slot_type: targetSlot }).eq('id', slot_id)
+      .update({ equipped: true, slot_type: targetCell.name }).eq('id', slot_id)
       .select('*, item:items(*, ammo_type:ammo_types(*), item_slot:item_slots(*))').single();
     if (ch.campaign_id) notifyCampaign(ch.campaign_id, 'inventory_updated', { character_id: cid });
     return res.json(data);
   }
 
-  res.status(400).json({ error: 'Нельзя экипировать' });
+  res.status(400).json({ error: 'Нет подходящей ячейки для экипировки' });
 });
 
 // POST /api/inventory/unequip
@@ -184,11 +151,11 @@ router.post('/unequip', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
-// POST /api/inventory/use — с поддержкой shots_per_action и skill_coefficients
+// POST /api/inventory/use
 router.post('/use', authMiddleware, async (req, res) => {
   const { slot_id, shots_count } = req.body;
   const { data: slot } = await supabase.from('inventory_slots')
-    .select('*, item:items(*)').eq('id', slot_id).single();
+    .select('*, item:items(*, item_slot:item_slots(*))').eq('id', slot_id).single();
   if (!slot) return res.status(404).json({ error: 'Не найден' });
 
   const { data: ch } = await supabase.from('characters')
@@ -196,76 +163,73 @@ router.post('/use', authMiddleware, async (req, res) => {
   if (!ch || ch.user_id !== req.user.id) return res.status(403).json({ error: 'Не ваш персонаж' });
 
   const item = slot.item;
-  const shots = Math.min(shots_count || 1, item.shots_per_action || 1);
+  const rules = item?.item_slot?.rules || {};
+  const actions = rules.actions || [];
 
-  if (item.weapon_type === 'ranged' && slot.equipped) {
+  const attackAction = actions.find(a => a.name === 'attack') || actions[0];
+  if (!attackAction) return res.status(400).json({ error: 'Нет доступных действий' });
+
+  // Действие с патронами
+  if (attackAction.consume_ammo && slot.equipped) {
     const currentAmmo = item.current_ammo || 0;
     const ammoPerShot = item.ammo_per_shot || 1;
-    const totalNeeded = shots * ammoPerShot;
-    const actualShots = Math.min(shots, Math.floor(currentAmmo / ammoPerShot));
-    if (actualShots <= 0) return res.status(400).json({ error: 'Нет патронов' });
+    const maxShots = item.shots_per_action || 1;
+    const requestedShots = Math.min(shots_count || maxShots, maxShots);
+    const possibleShots = Math.min(requestedShots, Math.floor(currentAmmo / ammoPerShot));
 
-    const consumed = actualShots * ammoPerShot;
+    if (possibleShots <= 0) return res.status(400).json({ error: 'Нет патронов' });
+
+    const consumed = possibleShots * ammoPerShot;
     await supabase.from('items').update({ current_ammo: currentAmmo - consumed }).eq('id', item.id);
 
-    // Броски на каждый выстрел
     const rolls = [];
-    for (let i = 0; i < actualShots; i++) {
-      const d20 = Math.floor(Math.random() * 20) + 1;
-      rolls.push(d20);
+    if (attackAction.roll_per_shot) {
+      for (let i = 0; i < possibleShots; i++) {
+        rolls.push(Math.floor(Math.random() * 20) + 1);
+      }
     }
 
-    const result = {
-      used: 'ammo', shots: actualShots, rolls,
-      remaining: currentAmmo - consumed,
-      action: `выстрелил ${actualShots} раз(а) из`
-    };
-
     if (ch.campaign_id) {
-      const msgText = `${ch.name} ${result.action} ${item.name} [${rolls.join(', ')}]`;
-      const { data: msg } = await supabase.from('chat_messages').insert({
+      const msgText = `${ch.name} ${attackAction.label || 'использовал'} ${item.name}${rolls.length ? ' [' + rolls.join(', ') + ']' : ''}`;
+      await supabase.from('chat_messages').insert({
         campaign_id: ch.campaign_id, user_id: req.user.id,
-        username: ch.name, text: msgText, is_roll: true
+        username: ch.name, text: msgText, is_roll: attackAction.roll_per_shot
       }).select().single();
-      if (msg) notifyCampaign(ch.campaign_id, 'chat_message', msg);
       notifyCampaign(ch.campaign_id, 'inventory_updated', { character_id: slot.character_id });
     }
-    return res.json(result);
+
+    return res.json({ action: attackAction.name, shots: possibleShots, rolls, remaining_ammo: currentAmmo - consumed });
   }
 
-  if (item.weapon_type === 'thrown' && slot.equipped) {
+  // Действие с уничтожением (метательное)
+  if (attackAction.destroy_on_use) {
     await supabase.from('inventory_slots').delete().eq('id', slot_id);
-    const result = { used: 'thrown', deleted: true, action: 'метнул' };
     if (ch.campaign_id) {
-      const msgText = `${ch.name} ${result.action} ${item.name}`;
+      const msgText = `${ch.name} ${attackAction.label || 'использовал'} ${item.name}`;
       await supabase.from('chat_messages').insert({
         campaign_id: ch.campaign_id, user_id: req.user.id,
         username: ch.name, text: msgText, is_roll: false
       }).select().single();
       notifyCampaign(ch.campaign_id, 'inventory_updated', { character_id: slot.character_id });
     }
-    return res.json(result);
+    return res.json({ action: attackAction.name, destroyed: true });
   }
 
-  if (item.slot === 'consumable' || item.item_slot_id) {
-    const nq = slot.quantity - 1;
-    if (nq <= 0) await supabase.from('inventory_slots').delete().eq('id', slot_id);
-    else await supabase.from('inventory_slots').update({ quantity: nq }).eq('id', slot_id);
+  // Обычное использование (расходник)
+  const nq = slot.quantity - 1;
+  if (nq <= 0) await supabase.from('inventory_slots').delete().eq('id', slot_id);
+  else await supabase.from('inventory_slots').update({ quantity: nq }).eq('id', slot_id);
 
-    const result = { used: 'consumable', deleted: nq <= 0, remaining: Math.max(0, nq), action: 'использовал' };
-    if (ch.campaign_id) {
-      const msgText = `${ch.name} ${result.action} ${item.name}`;
-      const { data: msg } = await supabase.from('chat_messages').insert({
-        campaign_id: ch.campaign_id, user_id: req.user.id,
-        username: ch.name, text: msgText, is_roll: false
-      }).select().single();
-      if (msg) notifyCampaign(ch.campaign_id, 'chat_message', msg);
-      notifyCampaign(ch.campaign_id, 'inventory_updated', { character_id: slot.character_id });
-    }
-    return res.json(result);
+  if (ch.campaign_id) {
+    const msgText = `${ch.name} ${attackAction.label || 'использовал'} ${item.name}`;
+    await supabase.from('chat_messages').insert({
+      campaign_id: ch.campaign_id, user_id: req.user.id,
+      username: ch.name, text: msgText, is_roll: false
+    }).select().single();
+    notifyCampaign(ch.campaign_id, 'inventory_updated', { character_id: slot.character_id });
   }
 
-  res.status(400).json({ error: 'Нельзя использовать' });
+  res.json({ action: attackAction.name, remaining: Math.max(0, nq) });
 });
 
 // POST /api/inventory/reload
@@ -281,11 +245,6 @@ router.post('/reload', authMiddleware, async (req, res) => {
   const { data: ch } = await supabase.from('characters')
     .select('user_id, campaign_id').eq('id', slot.character_id).single();
   if (!ch || ch.user_id !== req.user.id) return res.status(403).json({ error: 'Не ваш персонаж' });
-
-  const acceptedTypes = slot.item.accepted_ammo_types || [];
-  if (acceptedTypes.length > 0 && ammo_type_id && !acceptedTypes.includes(ammo_type_id)) {
-    return res.status(400).json({ error: 'Этот тип патронов не подходит' });
-  }
 
   const searchTypeId = ammo_type_id || slot.item.ammo_type_id;
   if (!searchTypeId) return res.status(400).json({ error: 'Не указан тип патронов' });
@@ -345,11 +304,8 @@ router.post('/:slotId/mod', authMiddleware, async (req, res) => {
     .select('*, item_slot:item_slots(*)').eq('id', mod_item_id).single();
   if (!modItem || modItem.item_slot?.name !== 'mod') return res.status(400).json({ error: 'Это не модификация' });
 
-  if (modItem.mod_item_slot_id) {
-    const { data: modSlot } = await supabase.from('item_slots').select('*').eq('id', modItem.mod_item_slot_id).single();
-    if (modSlot?.id !== slot.item?.item_slot_id) {
-      return res.status(400).json({ error: 'Модификация не подходит к этому типу предмета' });
-    }
+  if (modItem.mod_item_slot_id && modItem.mod_item_slot_id !== slot.item?.item_slot_id) {
+    return res.status(400).json({ error: 'Модификация не подходит к этому типу предмета' });
   }
 
   const mods = slot.mods || [];
@@ -390,7 +346,7 @@ router.post('/container/take', authMiddleware, async (req, res) => {
   const { slot_id, child_slot_id, quantity } = req.body;
 
   const { data: childSlot } = await supabase.from('inventory_slots')
-    .select('*, item:items(*)').eq('id', child_slot_id).single();
+    .select('*, item:items(*, item_slot:item_slots(*))').eq('id', child_slot_id).single();
   if (!childSlot) return res.status(404).json({ error: 'Предмет не найден в контейнере' });
 
   const { data: parentSlot } = await supabase.from('inventory_slots')
@@ -442,21 +398,23 @@ router.post('/container/use', authMiddleware, async (req, res) => {
 
   const item = childSlot.item;
   const slotName = item.item_slot?.name || item.slot;
+  const rules = item.item_slot?.rules || {};
+  const actions = rules.actions || [];
+  const useAction = actions[0];
 
-  if (slotName === 'consumable') {
+  if (slotName === 'consumable' || (useAction && !useAction.consume_ammo)) {
     const nq = (childSlot.quantity || 1) - 1;
     if (nq <= 0) await supabase.from('inventory_slots').delete().eq('id', child_slot_id);
     else await supabase.from('inventory_slots').update({ quantity: nq }).eq('id', child_slot_id);
 
-    const result = { used: 'consumable', deleted: nq <= 0, remaining: Math.max(0, nq), action: 'использовал из контейнера' };
     if (ch.campaign_id) {
-      const msgText = `${ch.name} ${result.action} ${item.name}`;
+      const msgText = `${ch.name} использовал из контейнера ${item.name}`;
       await supabase.from('chat_messages').insert({
         campaign_id: ch.campaign_id, user_id: req.user.id, username: ch.name, text: msgText, is_roll: false
       }).select().single();
       notifyCampaign(ch.campaign_id, 'inventory_updated', { character_id: parentSlot.character_id });
     }
-    return res.json(result);
+    return res.json({ used: 'consumable', remaining: Math.max(0, nq) });
   }
 
   if (slotName === 'ammo') {
@@ -480,15 +438,14 @@ router.post('/container/use', authMiddleware, async (req, res) => {
     if (remaining <= 0) await supabase.from('inventory_slots').delete().eq('id', child_slot_id);
     else await supabase.from('inventory_slots').update({ quantity: remaining }).eq('id', child_slot_id);
 
-    const result = { used: 'ammo', reloaded: toReload, weapon: equipped.item.name, action: 'перезарядил из контейнера' };
     if (ch.campaign_id) {
-      const msgText = `${ch.name} ${result.action} ${item.name} (${toReload} патронов)`;
+      const msgText = `${ch.name} перезарядил из контейнера ${item.name} (${toReload} патронов)`;
       await supabase.from('chat_messages').insert({
         campaign_id: ch.campaign_id, user_id: req.user.id, username: ch.name, text: msgText, is_roll: false
       }).select().single();
       notifyCampaign(ch.campaign_id, 'inventory_updated', { character_id: parentSlot.character_id });
     }
-    return res.json(result);
+    return res.json({ used: 'ammo', reloaded: toReload, weapon: equipped.item.name });
   }
 
   res.status(400).json({ error: 'Этот предмет нельзя использовать из контейнера' });
